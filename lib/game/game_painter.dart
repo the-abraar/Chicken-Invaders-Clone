@@ -142,7 +142,7 @@ class GamePainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(0, roadY, size.width, 52), _pFill);
     // Dashes
     _pFill.color = const Color(0xFFFFDD00).withValues(alpha: 0.5);
-    final dashW = 24.0, gap = 18.0, dashH = 3.0;
+    const dashW = 24.0, gap = 18.0, dashH = 3.0;
     final yc = roadY + 14;
     double dx = (t * 80) % (dashW + gap);
     while (dx - (dashW + gap) < size.width) {
@@ -294,7 +294,7 @@ class GamePainter extends CustomPainter {
       }
       // Red stamp
       _pFill.color = Colors.red.withValues(alpha: 0.7);
-      canvas.drawCircle(Offset(5, 7), 4, _pFill);
+      canvas.drawCircle(const Offset(5, 7), 4, _pFill);
       _drawText(canvas, '!', 5, 7, 7, Colors.white);
 
       canvas.restore();

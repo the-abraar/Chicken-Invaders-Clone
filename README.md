@@ -1,8 +1,10 @@
-# 🏍️ Mamla Invaders
+# 🏍️ Traffic Tyrants
 
 > The corrupt traffic sergeants of Bangladesh have taken to the skies — and they're raining **mamlas** (court cases 📋) on every biker below. Grab your helmet. Your honk is your weapon.
 
 A fast, juicy, emoji-powered Space Invaders built **entirely with Flutter's Canvas** — no game engine, no sprite sheets, just `CustomPainter`, math, and attitude. Runs on Android, iOS, desktop, and web from a single codebase.
+
+Built by **BlankFrame Technologies**.
 
 <p align="center">
   <em>😤 😠 🤬 — the formation sways, drops, and throws paperwork at you — 📋📋📋</em>
@@ -29,8 +31,8 @@ Firing is automatic — positioning *is* the skill.
 ## Run it
 
 ```bash
-git clone https://github.com/<you>/Chicken-Invaders-Clone.git
-cd Chicken-Invaders-Clone
+git clone https://github.com/<you>/traffic-tyrants.git
+cd traffic-tyrants
 flutter pub get
 flutter run          # or: flutter run -d chrome / -d windows / -d linux
 ```
@@ -79,10 +81,12 @@ Workflow: fork → branch → `flutter analyze` clean → PR with a short clip o
 
 ## The lore
 
-*Mamla* (মামলা) = a court case. In Dhaka traffic mythology, an unlucky biker can collect them like Pokémon. This game is affectionate satire — dodge the paperwork, jail the corrupt, go viral.
+*Mamla* (মামলা) = a court case. In Dhaka traffic mythology, an unlucky biker can collect them like Pokémon. This game is affectionate satire — dodge the paperwork, jail the tyrants, go viral.
 
-The repo also contains the game's ancestor: a weekend **pygame** prototype (`Main.py`, `src/`) that grew up into this Flutter app. It's kept for archaeology.
+**A game of many names.** This project has been reincarnated more times than a soap-opera villain: it began life as a weekend pygame *Chicken Invaders* clone (`Main.py` + `src/`, kept in the repo unmodified for archaeology), flirted with the titles *Chicken Henten*, *Mamla Invaders*, and *Mama Brake Kor!* — and has now settled down, gotten a job, and become **Traffic Tyrants**.
 
 ---
 
 *"Every mamla has an end. Ride through it."* 🏍️💨
+
+*© BlankFrame Technologies*

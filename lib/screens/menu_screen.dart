@@ -43,8 +43,8 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
               top: 60,
               left: 0, right: 0,
               child: Column(children: [
-                Text('MAMLA', style: TextStyle(
-                  fontSize: 52, fontWeight: FontWeight.w900,
+                Text('TRAFFIC', style: TextStyle(
+                  fontSize: 44, fontWeight: FontWeight.w900,
                   color: Colors.yellowAccent,
                   letterSpacing: 6,
                   shadows: [
@@ -52,10 +52,10 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
                     Shadow(blurRadius: 40, color: Colors.red.withValues(alpha: 0.4)),
                   ],
                 )),
-                Text('INVADERS', style: TextStyle(
-                  fontSize: 28, fontWeight: FontWeight.w900,
+                Text('TYRANTS', style: TextStyle(
+                  fontSize: 30, fontWeight: FontWeight.w900,
                   color: Colors.white,
-                  letterSpacing: 10,
+                  letterSpacing: 9,
                   shadows: [Shadow(blurRadius: 12, color: Colors.blue.withValues(alpha: 0.6))],
                 )),
               ]),
@@ -85,7 +85,7 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
                       borderRadius: BorderRadius.circular(40),
                       boxShadow: [BoxShadow(color: Colors.orange.withValues(alpha: 0.4), blurRadius: 24, spreadRadius: 2)],
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
                       Text('🏍️', style: TextStyle(fontSize: 22)),
                       SizedBox(width: 12),
                       Text('TAP TO RIDE', style: TextStyle(
@@ -96,9 +96,9 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
               ],
             )),
             // Legend
-            Positioned(
+            const Positioned(
               bottom: 80, left: 0, right: 0,
-              child: Column(children: const [
+              child: Column(children: [
                 Text('😤 = 10 pts   😠 = 25 pts   🤬 = 50 pts', style: TextStyle(color: Colors.white54, fontSize: 12)),
                 SizedBox(height: 6),
                 Text('🛡️ Shield   ⚡ Multi-shot   ⏱️ Slow-mo', style: TextStyle(color: Colors.white54, fontSize: 12)),
@@ -107,12 +107,21 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
               ]),
             ),
             // Controls hint
-            Positioned(
+            const Positioned(
               bottom: 30, left: 0, right: 0,
-              child: const Text(
+              child: Text(
                 'Hold LEFT / RIGHT sides to move (or ← → keys) • Auto-fires\nSPACE = viral blast • P = pause',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
+              ),
+            ),
+            // Studio credit
+            const Positioned(
+              bottom: 8, left: 0, right: 0,
+              child: Text(
+                'a BlankFrame Technologies game',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white24, fontSize: 9, letterSpacing: 1.2),
               ),
             ),
           ]);

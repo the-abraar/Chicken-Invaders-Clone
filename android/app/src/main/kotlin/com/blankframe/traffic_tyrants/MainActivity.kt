@@ -1,4 +1,4 @@
-package com.the_abraar.mamla_invaders
+package com.blankframe.traffic_tyrants
 
 import io.flutter.embedding.android.FlutterActivity
 

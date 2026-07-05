@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.the_abraar.mamla_invaders"
+    namespace = "com.blankframe.traffic_tyrants"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.the_abraar.mamla_invaders"
+        applicationId = "com.blankframe.traffic_tyrants"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

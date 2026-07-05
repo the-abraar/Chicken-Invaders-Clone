@@ -6,16 +6,16 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  runApp(const MamlaInvadersApp());
+  runApp(const TrafficTyrantsApp());
 }
 
-class MamlaInvadersApp extends StatelessWidget {
-  const MamlaInvadersApp({super.key});
+class TrafficTyrantsApp extends StatelessWidget {
+  const TrafficTyrantsApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Mamla Invaders',
+      title: 'Traffic Tyrants',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Colors.black,

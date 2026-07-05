@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Mamla Invaders – one-time Flutter project setup
-# Run this ONCE from inside the Chicken-Invaders-Clone directory:
-#   cd /path/to/Chicken-Invaders-Clone
+# Traffic Tyrants – one-time Flutter project setup
+# Run this ONCE from inside the traffic-tyrants directory:
+#   cd /path/to/traffic-tyrants
 #   bash flutter_setup.sh
 set -e
 
-PROJ="mamla_invaders"
-ORG="com.the_abraar"
+PROJ="traffic_tyrants"
+ORG="com.blankframe"
 
 echo "==> Creating Flutter project scaffold..."
 flutter create \

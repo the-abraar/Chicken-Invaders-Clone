@@ -595,14 +595,15 @@ class GameEngine extends ChangeNotifier {
   Future<void> _loadHigh() async {
     final p = await SharedPreferences.getInstance();
     if (_disposed) return; // engine may be gone before the async load resolves
-    highScore = p.getInt('mamla_high') ?? 0;
+    // 'mamla_high' fallback migrates records saved before the Traffic Tyrants rebrand.
+    highScore = p.getInt('tt_high') ?? p.getInt('mamla_high') ?? 0;
     notifyListeners();
   }
 
   Future<void> _saveHigh() async {
     if (score >= highScore) {
       final p = await SharedPreferences.getInstance();
-      await p.setInt('mamla_high', highScore);
+      await p.setInt('tt_high', highScore);
     }
   }
 }
