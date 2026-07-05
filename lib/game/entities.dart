@@ -2,95 +2,96 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
-enum EnemyType { constable, sergeant, inspector }
-enum PowerUpType { shield, multiShot, slowMo }
-enum GamePhase { getReady, playing, bossWarning, bossFight, levelComplete, gameOver }
+enum GamePhase { getReady, riding, gameOver }
+enum ObstacleType { rickshaw, cng, bus, dog, pothole }
+enum PickupKind { cash, tea, wrench }
 
-// ── Enemy ─────────────────────────────────────────────────────────────────────
-class Enemy {
-  final int row, col;
-  final EnemyType type;
-  bool alive = true;
-  int hp;
-  double hitFlash = 0; // brief white flash when damaged but not killed
-  double animTimer;
-  static final _rng = Random();
+// ── Obstacle (traffic, dogs, potholes) ────────────────────────────────────────
+class Obstacle {
+  final ObstacleType type;
+  double x, y;        // screen coords, centre
+  double ownSpeed;    // forward speed (subtracted from scroll)
+  double vx = 0;      // lateral velocity (dogs cross, honk shoves)
+  double weaveT;      // CNG weave phase
+  final int seed;     // stable per-entity variation (bus colour etc.)
+  bool active = true;
+  bool fleeing = false; // dog scared off by honk
+  bool shaved = false;  // near-miss already counted
 
-  Enemy({required this.row, required this.col, required this.type})
-      : hp = type == EnemyType.inspector ? 2 : 1,
-        animTimer = _rng.nextDouble() * 6.28;
+  Obstacle({required this.type, required this.x, required this.y,
+      required this.ownSpeed, required this.seed})
+      : weaveT = Random().nextDouble() * 6.28;
 
-  int get points => switch (type) {
-        EnemyType.constable  => 10,
-        EnemyType.sergeant   => 25,
-        EnemyType.inspector  => 50,
+  double get w => switch (type) {
+        ObstacleType.rickshaw => 34,
+        ObstacleType.cng      => 36,
+        ObstacleType.bus      => 62,
+        ObstacleType.dog      => 26,
+        ObstacleType.pothole  => 38,
       };
 
-  String get emoji => switch (type) {
-        EnemyType.constable  => '😤',
-        EnemyType.sergeant   => '😠',
-        EnemyType.inspector  => '🤬',
-      };
-
-  Color get hatColor => switch (type) {
-        EnemyType.constable  => const Color(0xFF8B7355),
-        EnemyType.sergeant   => const Color(0xFF3D5A23),
-        EnemyType.inspector  => const Color(0xFF1A1A8E),
+  double get h => switch (type) {
+        ObstacleType.rickshaw => 52,
+        ObstacleType.cng      => 56,
+        ObstacleType.bus      => 128,
+        ObstacleType.dog      => 22,
+        ObstacleType.pothole  => 22,
       };
 }
 
-// ── Boss ──────────────────────────────────────────────────────────────────────
-class Boss {
+// ── Sergeant (roadside mamla thrower) ─────────────────────────────────────────
+class Sergeant {
   double x, y;
-  double vx = 100;
-  double phase = 0;
-  int hp, maxHp;
-  double shootTimer = 1.5;
+  final int side; // -1 left shoulder, 1 right shoulder
+  double throwT;
+  double staggerT = 0; // honked-at: can't throw
   bool active = true;
 
-  Boss({required double sw, int level = 3})
-      : x = sw / 2,
-        y = 110,
-        hp = hpFor(level),
-        maxHp = hpFor(level);
-
-  // 6 HP for the first boss (level 3), +2 per subsequent boss, capped at 30.
-  static int hpFor(int level) => (6 + ((level ~/ 3) - 1).clamp(0, 12) * 2).clamp(6, 30);
+  Sergeant({required this.x, required this.y, required this.side})
+      : throwT = 0.6 + Random().nextDouble() * 0.8;
 }
 
-// ── Bullet ────────────────────────────────────────────────────────────────────
-class Bullet {
-  double x, y;
-  double vx, vy;
-  bool active = true;
-
-  Bullet({required this.x, required this.y, this.vx = 0, double speed = 500})
-      : vy = -speed;
-}
-
-// ── Mamla ─────────────────────────────────────────────────────────────────────
+// ── Mamla (flying court case) ─────────────────────────────────────────────────
 class Mamla {
-  double x, y, speed, angle = 0, spin;
-  double vx; // horizontal drift — sergeants aim at the player
+  double x, y, vx, vy, angle = 0, spin;
   bool active = true;
 
-  Mamla({required this.x, required this.y, required this.speed, this.vx = 0})
+  Mamla({required this.x, required this.y, required this.vx, required this.vy})
       : spin = (Random().nextDouble() - 0.5) * 5;
 }
 
-// ── PowerUp ───────────────────────────────────────────────────────────────────
-class PowerUp {
+// ── Roadside pickups ──────────────────────────────────────────────────────────
+class RoadPickup {
   double x, y;
-  final PowerUpType type;
+  final PickupKind kind;
+  final int value; // ৳ for cash
   bool active = true;
 
-  PowerUp({required this.x, required this.y, required this.type});
+  RoadPickup({required this.x, required this.y, required this.kind, this.value = 0});
 
-  String get emoji => switch (type) {
-        PowerUpType.shield    => '🛡️',
-        PowerUpType.multiShot => '⚡',
-        PowerUpType.slowMo    => '⏱️',
+  String get emoji => switch (kind) {
+        PickupKind.cash   => '💵',
+        PickupKind.tea    => '☕',
+        PickupKind.wrench => '🔧',
       };
+}
+
+// ── Fare markers ──────────────────────────────────────────────────────────────
+class FareMarker {
+  double x, y;
+  final bool dropoff;
+  bool active = true;
+
+  FareMarker({required this.x, required this.y, required this.dropoff});
+}
+
+// ── Police car ────────────────────────────────────────────────────────────────
+class PoliceCar {
+  double x, y;
+  bool active = true;
+  bool leaving = false; // wanted hit 0 — drives off
+
+  PoliceCar({required this.x, required this.y});
 }
 
 // ── Explosion ─────────────────────────────────────────────────────────────────

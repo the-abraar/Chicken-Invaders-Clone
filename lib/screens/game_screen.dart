@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../game/audio.dart';
 import '../game/game_engine.dart';
 import '../game/game_painter.dart';
@@ -20,13 +19,9 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   bool _navigating = false;
 
   // Raw pointer tracking (Listener instead of GestureDetector: gesture-arena
-  // competition made hold-to-move unresponsive until the finger dragged).
+  // competition made hold-to-steer unresponsive until the finger dragged).
   final Map<int, Offset> _pointers = {};
   final Map<int, (Offset, Duration)> _downInfo = {};
-
-  // Keyboard state (desktop/web) — merged with touch zones in _syncInput.
-  bool _kbLeft = false, _kbRight = false;
-  bool _zoneLeft = false, _zoneRight = false;
 
   @override
   void initState() {
@@ -48,34 +43,14 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   void _checkGameOver() {
     if (_engine.phase == GamePhase.gameOver && mounted && !_navigating) {
       _navigating = true; // schedule navigation exactly once
-      // Small delay so the last frame renders
-      Future.delayed(const Duration(milliseconds: 400), () {
+      // Short delay so the final crash renders
+      Future.delayed(const Duration(milliseconds: 900), () {
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => GameOverScreen(engine: _engine)));
         }
       });
     }
-  }
-
-  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    final k = event.logicalKey;
-    final down = event is! KeyUpEvent;
-    if (k == LogicalKeyboardKey.arrowLeft || k == LogicalKeyboardKey.keyA) {
-      _kbLeft = down; _syncInput(); return KeyEventResult.handled;
-    }
-    if (k == LogicalKeyboardKey.arrowRight || k == LogicalKeyboardKey.keyD) {
-      _kbRight = down; _syncInput(); return KeyEventResult.handled;
-    }
-    if (event is KeyDownEvent) {
-      if (k == LogicalKeyboardKey.space) {
-        _engine.viralBlast(); return KeyEventResult.handled;
-      }
-      if (k == LogicalKeyboardKey.keyP || k == LogicalKeyboardKey.escape) {
-        _engine.togglePause(); return KeyEventResult.handled;
-      }
-    }
-    return KeyEventResult.ignored;
   }
 
   void _goToMenu() {
@@ -105,20 +80,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           final w = constraints.maxWidth;
           final h = constraints.maxHeight;
 
-          // Start engine once we know the screen size
           if (!_started && w > 0 && h > 0) {
             _started = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
               _engine.start(this, w, h, topPad: topPad);
             });
           } else if (_started) {
-            _engine.resize(w, h); // no-op unless the window actually changed
+            _engine.resize(w, h);
           }
 
-          return Focus(
-            autofocus: true,
-            onKeyEvent: _onKey,
-            child: Listener(
+          return Listener(
             behavior: HitTestBehavior.opaque,
             onPointerDown: (e) {
               _pointers[e.pointer] = e.localPosition;
@@ -140,25 +111,24 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                   size: Size(w, h),
                 ),
               ),
-              // Touch zone indicators (semi-transparent)
+              // Steer zone hints
               Positioned(
                 bottom: 0, left: 0,
-                child: _ControlHint(icon: '◀', label: 'LEFT', w: w * 0.42, h: 110),
+                child: _SteerHint(icon: '◀', w: w * 0.40, h: 110),
               ),
               Positioned(
                 bottom: 0, right: 0,
-                child: _ControlHint(icon: '▶', label: 'RIGHT', w: w * 0.42, h: 110),
+                child: _SteerHint(icon: '▶', w: w * 0.40, h: 110),
               ),
+              // HONK button — the weapon
               Positioned(
-                bottom: 0,
-                left: w * 0.42,
-                width: w * 0.16,
-                height: 110,
-                child: _ViralHint(engine: _engine),
+                bottom: 22,
+                left: w * 0.40, width: w * 0.20,
+                child: Center(child: _HonkButton(engine: _engine)),
               ),
-              // Pause button (below the HUD, clear of the BEST readout)
+              // Pause button
               Positioned(
-                top: topPad + 58, right: 4,
+                top: topPad + 62, right: 4,
                 child: IconButton(
                   icon: const Icon(Icons.pause_rounded, color: Colors.white24, size: 26),
                   onPressed: _engine.togglePause,
@@ -172,7 +142,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
                     : const SizedBox.shrink(),
               ),
             ]),
-          ));
+          );
         },
       ),
     ));
@@ -182,26 +152,89 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     final down = _downInfo.remove(e.pointer);
     _pointers.remove(e.pointer);
     _updateZones(w);
-    // Swipe up = viral blast
+    // Swipe up = viral rush
     if (checkSwipe && down != null) {
       final dy = down.$1.dy - e.localPosition.dy;
       final ms = (e.timeStamp - down.$2).inMilliseconds;
-      if (dy > 70 && ms > 0 && ms < 400) _engine.viralBlast();
+      if (dy > 70 && ms > 0 && ms < 400) _engine.viralRush();
     }
   }
 
   void _updateZones(double w) {
-    _zoneLeft = false; _zoneRight = false;
+    bool left = false, right = false;
     for (final p in _pointers.values) {
-      if (p.dx < w * 0.42) _zoneLeft = true;
-      if (p.dx > w * 0.58) _zoneRight = true;
+      if (p.dx < w * 0.40) left = true;
+      if (p.dx > w * 0.60) right = true;
     }
-    _syncInput();
+    _engine.onLeft(left);
+    _engine.onRight(right);
   }
+}
 
-  void _syncInput() {
-    _engine.onLeft(_zoneLeft || _kbLeft);
-    _engine.onRight(_zoneRight || _kbRight);
+// ── Honk button ───────────────────────────────────────────────────────────────
+class _HonkButton extends StatelessWidget {
+  final GameEngine engine;
+  const _HonkButton({required this.engine});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: engine,
+      builder: (_, __) {
+        final ready = engine.honkReady;
+        final viral = engine.viralReady;
+        return GestureDetector(
+          onTap: engine.honk,
+          child: Container(
+            width: 68, height: 68,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: ready
+                  ? LinearGradient(colors: viral
+                      ? [Colors.orange.shade600, Colors.deepOrange.shade800]
+                      : [Colors.yellow.shade700, Colors.orange.shade800])
+                  : LinearGradient(colors: [Colors.grey.shade800, Colors.grey.shade900]),
+              boxShadow: ready
+                  ? [BoxShadow(color: Colors.orange.withValues(alpha: 0.45), blurRadius: 18, spreadRadius: 2)]
+                  : const [],
+              border: Border.all(color: Colors.white.withValues(alpha: ready ? 0.35 : 0.1), width: 2),
+            ),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Text('📣', style: TextStyle(fontSize: ready ? 26 : 22)),
+              Text(viral ? '↑ VIRAL' : 'HONK', style: TextStyle(
+                  fontSize: 8, letterSpacing: 1,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white.withValues(alpha: ready ? 0.9 : 0.3))),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Steer zone hint ───────────────────────────────────────────────────────────
+class _SteerHint extends StatelessWidget {
+  final String icon;
+  final double w, h;
+  const _SteerHint({required this.icon, required this.w, required this.h});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: w, height: h,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Colors.white.withValues(alpha: 0.04)],
+        ),
+        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      child: Center(
+        child: Text(icon, style: TextStyle(color: Colors.white.withValues(alpha: 0.22), fontSize: 26)),
+      ),
+    );
   }
 }
 
@@ -224,11 +257,11 @@ class _PauseOverlayState extends State<_PauseOverlay> {
         children: [
           const Text('⏸️', style: TextStyle(fontSize: 44)),
           const SizedBox(height: 8),
-          const Text('PAUSED', style: TextStyle(
+          const Text('CHA BREAK', style: TextStyle(
               fontSize: 26, fontWeight: FontWeight.w900,
               color: Colors.white, letterSpacing: 4)),
           const SizedBox(height: 28),
-          _PauseBtn(label: '▶  RESUME', color: Colors.orange.shade700, onTap: widget.onResume),
+          _PauseBtn(label: '▶  BACK TO WORK', color: Colors.orange.shade700, onTap: widget.onResume),
           const SizedBox(height: 12),
           _PauseBtn(
             label: Sfx.enabled ? '🔊  SOUND ON' : '🔇  SOUND OFF',
@@ -236,7 +269,7 @@ class _PauseOverlayState extends State<_PauseOverlay> {
             onTap: () => setState(() => Sfx.enabled = !Sfx.enabled),
           ),
           const SizedBox(height: 12),
-          _PauseBtn(label: '🏠  MAIN MENU', color: Colors.blueGrey.shade800, onTap: widget.onMenu),
+          _PauseBtn(label: '🏠  CALL IT A DAY', color: Colors.blueGrey.shade800, onTap: widget.onMenu),
         ],
       ),
     );
@@ -252,7 +285,7 @@ class _PauseBtn extends StatelessWidget {
   Widget build(BuildContext context) => GestureDetector(
     onTap: onTap,
     child: Container(
-      width: 220,
+      width: 230,
       padding: const EdgeInsets.symmetric(vertical: 13),
       decoration: BoxDecoration(
         color: color,
@@ -264,64 +297,4 @@ class _PauseBtn extends StatelessWidget {
               color: Colors.white, letterSpacing: 1.2)),
     ),
   );
-}
-
-// ── Left / Right zone hint ────────────────────────────────────────────────────
-class _ControlHint extends StatelessWidget {
-  final String icon, label;
-  final double w, h;
-  const _ControlHint({required this.icon, required this.label, required this.w, required this.h});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: w, height: h,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.transparent, Colors.white.withValues(alpha: 0.04)],
-        ),
-        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(icon, style: TextStyle(color: Colors.white.withValues(alpha: 0.25), fontSize: 28)),
-          Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.15), fontSize: 9, letterSpacing: 2)),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Viral blast centre hint ───────────────────────────────────────────────────
-class _ViralHint extends StatelessWidget {
-  final GameEngine engine;
-  const _ViralHint({required this.engine});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: engine,
-      builder: (_, __) {
-        final ready = engine.viralCharge >= 1.0;
-        return Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(ready ? '🔥' : '○', style: TextStyle(
-              fontSize: ready ? 28 : 14,
-              color: ready ? Colors.orange : Colors.white24)),
-            Text('VIRAL', style: TextStyle(
-              color: ready ? Colors.orange.withValues(alpha: 0.8) : Colors.white12,
-              fontSize: 8, letterSpacing: 1.5,
-              fontWeight: FontWeight.w700)),
-            Text('↑ swipe', style: TextStyle(
-              color: ready ? Colors.orange.withValues(alpha: 0.6) : Colors.white12,
-              fontSize: 7)),
-          ],
-        );
-      },
-    );
-  }
 }

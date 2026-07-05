@@ -3,23 +3,31 @@ import 'package:flutter/material.dart';
 import 'constants.dart';
 import 'entities.dart';
 import 'game_engine.dart';
+import 'save_data.dart';
 
 class GamePainter extends CustomPainter {
   final GameEngine engine;
-  final double t; // time for animations
+  final double t; // wall-clock time for ambient animation
 
   GamePainter(this.engine, this.t);
 
-  // Reusable paints
-  final _p     = Paint();
   final _pFill = Paint()..style = PaintingStyle.fill;
   final _pStr  = Paint()..style = PaintingStyle.stroke;
 
   static final _rng = Random();
 
-  // TextPainter layout is the most expensive per-frame cost (~80-100 layouts
-  // per frame uncached). Cache by text/size/color; alpha is quantized to 1/20
-  // steps so fading text still gets cache hits. Bounded to avoid growth.
+  // Bike paint job per engine tier — your hustle, visible.
+  static const _tierColors = [
+    Color(0xFF7A4A2B), // rusty brown — the crappy starter bike
+    Color(0xFFB3282D), // red
+    Color(0xFFE86A17), // orange
+    Color(0xFF1B9AAA), // teal
+    Color(0xFF7B2FBE), // purple
+    Color(0xFFD4AF37), // gold — full tyrant
+  ];
+
+  // TextPainter layout is the most expensive per-frame cost. Cache by
+  // text/size/color; alpha quantized so fading text still hits the cache.
   static final Map<String, TextPainter> _tpCache = {};
 
   static TextPainter _tp(String text, double fontSize, Color color, {bool emoji = false}) {
@@ -29,8 +37,6 @@ class GamePainter extends CustomPainter {
     var tp = _tpCache[key];
     if (tp == null) {
       if (_tpCache.length > 300) {
-        // Evict the oldest half (insertion order) instead of nuking the whole
-        // cache — a full clear caused a visible one-frame layout hitch.
         final stale = _tpCache.keys.take(150).toList();
         for (final k in stale) {
           _tpCache.remove(k);
@@ -57,7 +63,6 @@ class GamePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Screen shake transform
     if (engine.shake > 0) {
       final dx = (_rng.nextDouble() - 0.5) * 10 * engine.shake;
       final dy = (_rng.nextDouble() - 0.5) * 10 * engine.shake;
@@ -65,210 +70,234 @@ class GamePainter extends CustomPainter {
       canvas.translate(dx, dy);
     }
 
-    _drawBackground(canvas, size);
-    _drawStars(canvas, size);
-    _drawCityline(canvas, size);
+    _drawGround(canvas, size);
     _drawRoad(canvas, size);
+    _drawRoadside(canvas, size);
 
-    // ── Game entities ─────────────────────────────────────────────────────────
-    _drawPowerUps(canvas);
-    _drawBoss(canvas);
-    _drawEnemies(canvas);
-    _drawBullets(canvas);
+    // World entities, back-to-front
+    for (final o in engine.obstacles) {
+      if (o.type == ObstacleType.pothole) _drawPothole(canvas, o);
+    }
+    _drawMarkers(canvas);
+    _drawPickups(canvas);
+    for (final s in engine.sergeants) {
+      _drawSergeant(canvas, s);
+    }
+    for (final o in engine.obstacles) {
+      switch (o.type) {
+        case ObstacleType.rickshaw: _drawRickshaw(canvas, o);
+        case ObstacleType.cng:      _drawCng(canvas, o);
+        case ObstacleType.bus:      _drawBus(canvas, o);
+        case ObstacleType.dog:      _drawDog(canvas, o);
+        case ObstacleType.pothole:  break; // already drawn under traffic
+      }
+    }
+    _drawPolice(canvas);
     _drawMamlas(canvas);
-    _drawPlayer(canvas, size);
+    _drawBike(canvas);
     _drawExplosions(canvas);
     _drawFloatingTexts(canvas);
 
     if (engine.shake > 0) canvas.restore();
 
-    // ── HUD (no shake) ────────────────────────────────────────────────────────
     _drawHUD(canvas, size);
 
-    // ── Phase overlays ────────────────────────────────────────────────────────
     if (engine.phase == GamePhase.getReady) _drawGetReady(canvas, size);
-    if (engine.phase == GamePhase.bossWarning) _drawBossWarning(canvas, size);
-    if (engine.phase == GamePhase.levelComplete) _drawLevelComplete(canvas, size);
+    if (engine.phase == GamePhase.gameOver) _drawKaput(canvas, size);
   }
 
-  // ── Background ───────────────────────────────────────────────────────────────
+  // ── Ground / road ─────────────────────────────────────────────────────────────
 
-  static Shader? _bgShader;
-  static Size? _bgSize;
-  static final _bgPaint = Paint();
-
-  void _drawBackground(Canvas canvas, Size size) {
-    if (_bgShader == null || _bgSize != size) {
-      _bgShader = const LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [Color(0xFF060612), Color(0xFF0D0D2B), Color(0xFF111122)],
-      ).createShader(Offset.zero & size);
-      _bgSize = size;
-      _bgPaint.shader = _bgShader;
-    }
-    canvas.drawRect(Offset.zero & size, _bgPaint);
-  }
-
-  void _drawStars(Canvas canvas, Size size) {
-    // Seed the stars with a stable hash so they don't flicker
-    final rng = Random(42);
-    _p.color = Colors.white;
-    for (int i = 0; i < 80; i++) {
-      final x = rng.nextDouble() * size.width;
-      final y = rng.nextDouble() * size.height * 0.65;
-      final r = 0.4 + rng.nextDouble() * 1.0;
-      final twinkle = 0.4 + 0.6 * (0.5 + 0.5 * sin(t * (1 + i * 0.17) + i));
-      _p.color = Colors.white.withValues(alpha: twinkle * 0.75);
-      canvas.drawCircle(Offset(x, y), r, _p);
-    }
-  }
-
-  void _drawCityline(Canvas canvas, Size size) {
-    final rng = Random(99);
-    final paint = Paint()..color = const Color(0xFF0A0A1A);
-    double x = 0;
-    while (x < size.width) {
-      final w = 14.0 + rng.nextDouble() * 32;
-      final h = 30.0 + rng.nextDouble() * 60;
-      canvas.drawRect(Rect.fromLTWH(x, size.height - h - 55, w, h), paint);
-      x += w + rng.nextDouble() * 6;
-    }
+  void _drawGround(Canvas canvas, Size size) {
+    _pFill.color = const Color(0xFF10131A); // night-time sidewalks
+    canvas.drawRect(Offset.zero & size, _pFill);
   }
 
   void _drawRoad(Canvas canvas, Size size) {
-    final roadY = size.height - 52;
-    _pFill.color = const Color(0xFF1A1A1A);
-    canvas.drawRect(Rect.fromLTWH(0, roadY, size.width, 52), _pFill);
-    // Dashes
-    _pFill.color = const Color(0xFFFFDD00).withValues(alpha: 0.5);
-    const dashW = 24.0, gap = 18.0, dashH = 3.0;
-    final yc = roadY + 14;
-    double dx = (t * 80) % (dashW + gap);
-    while (dx - (dashW + gap) < size.width) {
-      canvas.drawRect(Rect.fromLTWH(dx, yc, dashW, dashH), _pFill);
-      dx += dashW + gap;
+    final l = engine.roadL, r = engine.roadR;
+    _pFill.color = const Color(0xFF23252B);
+    canvas.drawRect(Rect.fromLTRB(l, 0, r, size.height), _pFill);
+
+    // Edge lines
+    _pFill.color = const Color(0xFFB9B9B9).withValues(alpha: 0.5);
+    canvas.drawRect(Rect.fromLTWH(l, 0, 3, size.height), _pFill);
+    canvas.drawRect(Rect.fromLTWH(r - 3, 0, 3, size.height), _pFill);
+
+    // Lane dashes scroll DOWN as you ride forward.
+    const dashH = 26.0, gap = 22.0, period = dashH + gap;
+    final off = engine.worldOffset % period;
+    _pFill.color = const Color(0xFFFFDD00).withValues(alpha: 0.4);
+    for (int lane = 1; lane < kLanes; lane++) {
+      final x = l + engine.laneW * lane;
+      for (double y = off - period; y < size.height + period; y += period) {
+        canvas.drawRect(Rect.fromLTWH(x - 2, y, 4, dashH), _pFill);
+      }
     }
   }
 
-  // ── Enemies ───────────────────────────────────────────────────────────────────
+  static const _props = ['🌳', '🏚️', '🏪', '🛖', '🌴', '🏬', '🕌', '🌳'];
 
-  void _drawEnemies(Canvas canvas) {
-    for (final e in engine.enemies) {
-      if (!e.alive) continue;
-      final (ex, ey) = engine.ePos(e);
-      final bob = sin(e.animTimer) * 2.5;
-      _drawSergeant(canvas, ex, ey + bob, e);
+  void _drawRoadside(Canvas canvas, Size size) {
+    const period = 96.0;
+    final off = engine.worldOffset;
+    final rowStart = ((off - 60) / period).floor();
+    final rowEnd   = ((off + size.height + 60) / period).ceil();
+    for (int side = 0; side < 2; side++) {
+      final baseX = side == 0 ? engine.roadL * 0.5 : size.width - engine.roadL * 0.5;
+      for (int row = rowStart; row <= rowEnd; row++) {
+        final worldY = row * period;
+        final y = size.height - (worldY - off);
+        if (y < -60 || y > size.height + 60) continue;
+        final rng = Random(row * 31 + side * 7 + 3);
+        if (rng.nextDouble() < 0.22) {
+          // Street lamp with warm glow
+          _pFill.color = const Color(0xFFFFB84D).withValues(alpha: 0.12);
+          canvas.drawCircle(Offset(baseX, y), 26, _pFill);
+          _pFill.color = const Color(0xFFFFB84D);
+          canvas.drawCircle(Offset(baseX, y), 3, _pFill);
+        } else {
+          final e = _props[rng.nextInt(_props.length)];
+          _drawEmoji(canvas, e, baseX + (rng.nextDouble() - 0.5) * 14, y,
+              20 + rng.nextInt(3) * 4.0);
+        }
+      }
     }
   }
 
-  void _drawSergeant(Canvas canvas, double cx, double cy, Enemy e) {
-    final r = 17.0 * engine.enemyScale; // matches engine collision scale
+  // ── Traffic ───────────────────────────────────────────────────────────────────
 
-    // Body circle
-    _pFill.color = e.hatColor;
-    canvas.drawCircle(Offset(cx, cy), r, _pFill);
-
-    // Damage flash (inspectors survive the first hit)
-    if (e.hitFlash > 0) {
-      _pFill.color = Colors.white.withValues(alpha: (e.hitFlash * 2.5).clamp(0.0, 0.8));
-      canvas.drawCircle(Offset(cx, cy), r + 3, _pFill);
-    }
-
-    // Hat (trapezoid on top)
-    final hatPaint = Paint()..color = e.hatColor.withValues(red: e.hatColor.r * 0.7);
-    final hat = Path()
-      ..moveTo(cx - r * 0.6, cy - r * 0.55)
-      ..lineTo(cx + r * 0.6, cy - r * 0.55)
-      ..lineTo(cx + r * 0.4, cy - r * 1.1)
-      ..lineTo(cx - r * 0.4, cy - r * 1.1)
-      ..close();
-    canvas.drawPath(hat, hatPaint);
-    // Hat brim
-    _pFill.color = Colors.black.withValues(alpha: 0.6);
-    canvas.drawRect(Rect.fromLTWH(cx - r * 0.7, cy - r * 0.65, r * 1.4, 3), _pFill);
-
-    // Badge star
-    _drawEmoji(canvas, '⭐', cx + r * 0.35, cy - r * 0.9, 9 * engine.enemyScale);
-
-    // Face emoji
-    _drawEmoji(canvas, e.emoji, cx, cy + 1, 22 * engine.enemyScale);
-
-    // Angry arms (outstretched)
-    final armAngle = sin(e.animTimer * 1.5) * 0.3;
-    _pStr
-      ..color = e.hatColor
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(
-      Offset(cx - r * 0.8, cy + 2),
-      Offset(cx - r * 1.6, cy + 4 + sin(armAngle) * 5), _pStr);
-    canvas.drawLine(
-      Offset(cx + r * 0.8, cy + 2),
-      Offset(cx + r * 1.6, cy + 4 + sin(-armAngle) * 5), _pStr);
+  void _drawPothole(Canvas canvas, Obstacle o) {
+    _pFill.color = const Color(0xFF15161A);
+    canvas.drawOval(Rect.fromCenter(center: Offset(o.x, o.y), width: o.w, height: o.h), _pFill);
+    _pFill.color = const Color(0xFF0A0B0E);
+    canvas.drawOval(Rect.fromCenter(center: Offset(o.x, o.y + 1), width: o.w * 0.7, height: o.h * 0.6), _pFill);
   }
 
-  // ── Boss ─────────────────────────────────────────────────────────────────────
+  static const _canopyColors = [
+    Color(0xFFE63946), Color(0xFF457B9D), Color(0xFF2A9D8F),
+    Color(0xFFF4A261), Color(0xFF9B5DE5),
+  ];
 
-  void _drawBoss(Canvas canvas) {
-    final b = engine.boss;
-    if (b == null || !b.active) return;
-
-    final pulse = 0.9 + 0.1 * sin(t * 6);
-
-    // Aura
-    _pFill.color = Colors.red.withValues(alpha: 0.15 * pulse);
-    canvas.drawCircle(Offset(b.x, b.y), 52, _pFill);
-
+  void _drawRickshaw(Canvas canvas, Obstacle o) {
+    final x = o.x, y = o.y;
+    // Wheels
+    _pFill.color = const Color(0xFF15161A);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x - 14, y + 12), width: 5, height: 20), const Radius.circular(2)), _pFill);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x + 14, y + 12), width: 5, height: 20), const Radius.circular(2)), _pFill);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y - 20), width: 5, height: 16), const Radius.circular(2)), _pFill);
     // Body
-    _pFill.color = const Color(0xFF1A1A8E);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(b.x, b.y), width: 80, height: 60), const Radius.circular(12)),
-      _pFill);
-
-    // Hat (bigger)
-    _pFill.color = const Color(0xFF0A0A5E);
-    canvas.drawRect(Rect.fromLTWH(b.x - 32, b.y - 38, 64, 8), _pFill);
-    canvas.drawRect(Rect.fromLTWH(b.x - 22, b.y - 60, 44, 28), _pFill);
-
-    // Stars
-    for (int i = 0; i < 3; i++) {
-      _drawEmoji(canvas, '⭐', b.x - 18 + i * 18.0, b.y - 28, 12);
-    }
-
-    // Face
-    _drawEmoji(canvas, '👿', b.x, b.y + 4, 36);
-
-    // HP bar
-    _pFill.color = Colors.red.shade800;
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(b.x - 44, b.y - 70, 88, 8), const Radius.circular(4)), _pFill);
-    _pFill.color = Colors.red;
-    final hpW = 88.0 * (b.hp / b.maxHp);
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(b.x - 44, b.y - 70, hpW, 8), const Radius.circular(4)), _pFill);
-
-    // Label
-    _drawText(canvas, '👮 SUPER INSPECTOR', b.x, b.y - 80, 11, Colors.yellowAccent);
+    _pFill.color = const Color(0xFF3A3D46);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y - 4), width: 22, height: 36), const Radius.circular(4)), _pFill);
+    // Canopy over the rear (passenger seat)
+    _pFill.color = _canopyColors[o.seed % _canopyColors.length];
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y + 10), width: 30, height: 26), const Radius.circular(9)), _pFill);
+    _pFill.color = Colors.white.withValues(alpha: 0.25);
+    canvas.drawRect(Rect.fromCenter(center: Offset(x, y + 10), width: 30, height: 3), _pFill);
+    // Puller
+    _pFill.color = const Color(0xFFE0B084);
+    canvas.drawCircle(Offset(x, y - 16), 5, _pFill);
   }
 
-  // ── Bullets ───────────────────────────────────────────────────────────────────
+  void _drawCng(Canvas canvas, Obstacle o) {
+    final x = o.x, y = o.y;
+    // Body — the classic green baby taxi
+    _pFill.color = const Color(0xFF2C7A2C);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y), width: o.w, height: o.h), const Radius.circular(10)), _pFill);
+    // Cab front (darker)
+    _pFill.color = const Color(0xFF1E551E);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y - o.h / 2 + 10), width: o.w - 6, height: 16), const Radius.circular(6)), _pFill);
+    // Roof stripe + meter sign
+    _pFill.color = const Color(0xFF67B96A);
+    canvas.drawRect(Rect.fromCenter(center: Offset(x, y + 4), width: 8, height: o.h - 24), _pFill);
+    _pFill.color = const Color(0xFFFFDD00);
+    canvas.drawRect(Rect.fromCenter(center: Offset(x, y - o.h / 2 + 4), width: 10, height: 4), _pFill);
+  }
 
-  void _drawBullets(Canvas canvas) {
-    for (final b in engine.bullets) {
-      if (!b.active) continue;
-      // Glow
-      _pFill.color = Colors.yellow.withValues(alpha: 0.3);
-      canvas.drawCircle(Offset(b.x, b.y), 7, _pFill);
-      // Core
-      _pFill.color = Colors.yellow;
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(center: Offset(b.x, b.y), width: kBulletW, height: kBulletH),
-          const Radius.circular(3)),
-        _pFill);
-      // Tip
-      _pFill.color = Colors.white;
-      canvas.drawCircle(Offset(b.x, b.y - kBulletH / 2 + 2), 2.5, _pFill);
+  static const _busColors = [Color(0xFFB3282D), Color(0xFF2D6CB3), Color(0xFF2DB35A), Color(0xFFB3902D)];
+
+  void _drawBus(Canvas canvas, Obstacle o) {
+    final x = o.x, y = o.y;
+    final c = _busColors[o.seed % _busColors.length];
+    _pFill.color = c;
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y), width: o.w, height: o.h), const Radius.circular(8)), _pFill);
+    // Windshield
+    _pFill.color = const Color(0xFF101820).withValues(alpha: 0.85);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y - o.h / 2 + 12), width: o.w - 10, height: 14), const Radius.circular(4)), _pFill);
+    // Roof — battle scars of a Dhaka local bus
+    _pFill.color = Colors.white.withValues(alpha: 0.18);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y + 8), width: o.w - 18, height: o.h - 46), const Radius.circular(5)), _pFill);
+    _pStr..color = Colors.black.withValues(alpha: 0.25)..strokeWidth = 2;
+    for (int i = 0; i < 3; i++) {
+      final ly = y - o.h / 2 + 34 + i * 28.0;
+      canvas.drawLine(Offset(x - o.w / 2 + 8, ly), Offset(x + o.w / 2 - 8, ly), _pStr);
     }
+  }
+
+  void _drawDog(Canvas canvas, Obstacle o) {
+    canvas.save();
+    canvas.translate(o.x, o.y);
+    if (o.vx > 0) canvas.scale(-1, 1); // 🐕 faces left; flip when running right
+    final hop = sin(t * 14 + o.seed) * 2.0;
+    _drawEmoji(canvas, '🐕', 0, hop, 24);
+    canvas.restore();
+    if (o.fleeing) _drawEmoji(canvas, '💨', o.x - o.vx.sign * 18, o.y, 14);
+  }
+
+  void _drawSergeant(Canvas canvas, Sergeant s) {
+    const r = 13.0;
+    final bob = sin(t * 3 + s.x) * 1.5;
+    final y = s.y + bob;
+    // Body
+    _pFill.color = const Color(0xFF3D5A23);
+    canvas.drawCircle(Offset(s.x, y), r, _pFill);
+    // Cap
+    _pFill.color = const Color(0xFF2A3F18);
+    canvas.drawRect(Rect.fromCenter(center: Offset(s.x, y - r * 0.8), width: r * 1.5, height: 5), _pFill);
+    // Face
+    _drawEmoji(canvas, s.staggerT > 0 ? '😵' : '😠', s.x, y + 1, 15);
+    // Throwing arm wind-up
+    if (s.staggerT <= 0) {
+      _pStr..color = const Color(0xFF3D5A23)..strokeWidth = 3..strokeCap = StrokeCap.round;
+      final wind = sin(t * 5 + s.x) * 3;
+      canvas.drawLine(Offset(s.x + s.side * -r * 0.7, y),
+          Offset(s.x + s.side * -r * 1.5, y - 6 + wind), _pStr);
+    }
+  }
+
+  void _drawPolice(Canvas canvas) {
+    final pc = engine.police;
+    if (pc == null || !pc.active) return;
+    final x = pc.x, y = pc.y;
+    // Siren glow
+    final flash = (t * 6).toInt() % 2 == 0;
+    _pFill.color = (flash ? Colors.red : Colors.blue).withValues(alpha: 0.22);
+    canvas.drawCircle(Offset(x, y - 20), 34, _pFill);
+    // Body
+    _pFill.color = const Color(0xFF13205C);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y), width: 44, height: 80), const Radius.circular(8)), _pFill);
+    // White doors band
+    _pFill.color = Colors.white.withValues(alpha: 0.85);
+    canvas.drawRect(Rect.fromCenter(center: Offset(x, y + 6), width: 44, height: 12), _pFill);
+    // Windshield
+    _pFill.color = const Color(0xFF0A1020);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y - 26), width: 36, height: 12), const Radius.circular(3)), _pFill);
+    // Light bar
+    _pFill.color = flash ? Colors.red : Colors.blue;
+    canvas.drawRect(Rect.fromCenter(center: Offset(x - 8, y - 16), width: 12, height: 6), _pFill);
+    _pFill.color = flash ? Colors.blue : Colors.red;
+    canvas.drawRect(Rect.fromCenter(center: Offset(x + 8, y - 16), width: 12, height: 6), _pFill);
   }
 
   // ── Mamlas ────────────────────────────────────────────────────────────────────
@@ -279,139 +308,145 @@ class GamePainter extends CustomPainter {
       canvas.save();
       canvas.translate(m.x, m.y);
       canvas.rotate(m.angle);
-
-      // Paper body
       _pFill.color = const Color(0xFFF5F0E0);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
+      canvas.drawRRect(RRect.fromRectAndRadius(
           Rect.fromCenter(center: Offset.zero, width: kMamlaW, height: kMamlaH),
-          const Radius.circular(2)),
-        _pFill);
-      // Lines (text effect)
+          const Radius.circular(2)), _pFill);
       _pFill.color = const Color(0xFF2244AA).withValues(alpha: 0.6);
       for (int i = 0; i < 4; i++) {
         canvas.drawRect(Rect.fromLTWH(-8, -9.0 + i * 5, 16, 1.5), _pFill);
       }
-      // Red stamp
       _pFill.color = Colors.red.withValues(alpha: 0.7);
       canvas.drawCircle(const Offset(5, 7), 4, _pFill);
       _drawText(canvas, '!', 5, 7, 7, Colors.white);
-
       canvas.restore();
     }
   }
 
-  // ── Player ────────────────────────────────────────────────────────────────────
+  // ── Fare markers & pickups ────────────────────────────────────────────────────
 
-  void _drawPlayer(Canvas canvas, Size size) {
-    final px = engine.playerX;
-    final py = engine.playerY;
-    final lean = engine.movLeft ? -0.12 : engine.movRight ? 0.12 : 0.0;
+  void _drawMarkers(Canvas canvas) {
+    for (final m in [engine.pickupMarker, engine.dropMarker]) {
+      if (m == null || !m.active) continue;
+      final c = m.dropoff ? Colors.orange : Colors.greenAccent;
+      final pulse = 0.8 + 0.2 * sin(t * 5);
+      _pFill.color = c.withValues(alpha: 0.16 * pulse);
+      canvas.drawCircle(Offset(m.x, m.y), kMarkerSize * pulse, _pFill);
+      _pStr..color = c.withValues(alpha: 0.8)..strokeWidth = 3;
+      canvas.drawCircle(Offset(m.x, m.y), kMarkerSize * 0.72, _pStr);
+      _drawEmoji(canvas, m.dropoff ? '📍' : '🙋', m.x, m.y - 2, 26);
+      final bob = sin(t * 6) * 4;
+      _drawText(canvas, '▼', m.x, m.y - kMarkerSize - 12 + bob, 16, c);
+    }
+  }
 
-    canvas.save();
-    canvas.translate(px, py);
-    canvas.rotate(lean);
+  void _drawPickups(Canvas canvas) {
+    for (final p in engine.pickups) {
+      if (!p.active) continue;
+      final bounce = sin(t * 5 + p.x) * 3;
+      _pFill.color = Colors.cyan.withValues(alpha: 0.2 + 0.08 * sin(t * 6));
+      canvas.drawCircle(Offset(p.x, p.y + bounce), 17, _pFill);
+      _drawEmoji(canvas, p.emoji, p.x, p.y + bounce, 22);
+    }
+  }
 
-    // Shield glow
-    if (engine.shielded) {
-      _pFill.color = Colors.cyanAccent.withValues(alpha: 0.2 + 0.15 * sin(t * 8));
-      canvas.drawCircle(Offset.zero, 36, _pFill);
-      _pStr..color = Colors.cyanAccent.withValues(alpha: 0.6)..strokeWidth = 2;
-      canvas.drawCircle(Offset.zero, 36, _pStr);
+  // ── The bike ──────────────────────────────────────────────────────────────────
+
+  void _drawBike(Canvas canvas) {
+    final e = engine;
+    final x = e.bikeX, y = e.bikeY;
+    final lean = e.movLeft ? -0.14 : e.movRight ? 0.14 : 0.0;
+    final tier = SaveData.engine.clamp(0, _tierColors.length - 1);
+
+    // Headlight beam
+    _pFill.color = const Color(0xFFFFF3B0).withValues(alpha: 0.10);
+    final beam = Path()
+      ..moveTo(x - 8, y - 26)
+      ..lineTo(x - 26, y - 150)
+      ..lineTo(x + 26, y - 150)
+      ..lineTo(x + 8, y - 26)
+      ..close();
+    canvas.drawPath(beam, _pFill);
+
+    // Viral rush aura
+    if (e.rushT > 0) {
+      _pFill.color = Colors.orange.withValues(alpha: 0.18 + 0.1 * sin(t * 10));
+      canvas.drawCircle(Offset(x, y), 44, _pFill);
+    }
+
+    // Honk shockwave ring
+    if (e.honkFx > 0) {
+      final p = 1 - e.honkFx; // 0 → 1
+      _pStr
+        ..color = Colors.yellowAccent.withValues(alpha: 0.5 * e.honkFx)
+        ..strokeWidth = 3;
+      canvas.drawCircle(Offset(x, y), e.honkRadius * (0.3 + 0.7 * p), _pStr);
     }
 
     // Invincibility blink
-    if (engine.invincible && (t * 8).toInt() % 2 == 0) {
-      canvas.restore();
-      return;
-    }
+    if (e.invincT > 0 && (t * 8).toInt() % 2 == 0) return;
 
-    // ── Motorcycle body ───────────────────────────────────────────────────────
-    // Wheels
-    _pStr..color = const Color(0xFF444444)..strokeWidth = 5;
-    _pFill.color = const Color(0xFF222222);
-    canvas.drawCircle(const Offset(-18, 14), 14, _pFill);
-    canvas.drawCircle(const Offset(-18, 14), 14, _pStr);
-    canvas.drawCircle(const Offset( 18, 14), 14, _pFill);
-    canvas.drawCircle(const Offset( 18, 14), 14, _pStr);
-    // Wheel spokes
-    _pStr..color = const Color(0xFF666666)..strokeWidth = 1.5;
-    for (int i = 0; i < 6; i++) {
-      final a = i * pi / 3 + t * 4;
-      canvas.drawLine(
-        Offset(-18 + cos(a) * 4, 14 + sin(a) * 4),
-        Offset(-18 + cos(a) * 12, 14 + sin(a) * 12), _pStr);
-      canvas.drawLine(
-        Offset( 18 + cos(a) * 4, 14 + sin(a) * 4),
-        Offset( 18 + cos(a) * 12, 14 + sin(a) * 12), _pStr);
-    }
-    // Frame
-    _pFill.color = const Color(0xFFCC4400);
-    final body = Path()
-      ..moveTo(-20, 8)
-      ..lineTo(-14, -6)
-      ..lineTo( 14, -6)
-      ..lineTo( 20, 8)
-      ..close();
-    canvas.drawPath(body, _pFill);
-    // Fuel tank
-    _pFill.color = const Color(0xFFFF5500);
-    canvas.drawRRect(RRect.fromRectAndRadius(const Rect.fromLTWH(-8, -10, 16, 8), const Radius.circular(4)), _pFill);
+    canvas.save();
+    canvas.translate(x, y);
+    canvas.rotate(lean);
+
+    // Wheels (top-down: front above, rear below)
+    _pFill.color = const Color(0xFF15161A);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: const Offset(0, -22), width: 9, height: 18), const Radius.circular(4)), _pFill);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: const Offset(0, 20), width: 10, height: 20), const Radius.circular(4)), _pFill);
+
+    // Frame + tank (tier colour = visible progression)
+    _pFill.color = _tierColors[tier];
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: const Offset(0, -4), width: 16, height: 34), const Radius.circular(6)), _pFill);
+    // Tank shine
+    _pFill.color = Colors.white.withValues(alpha: tier >= 4 ? 0.45 : 0.2);
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromCenter(center: const Offset(-3, -8), width: 4, height: 14), const Radius.circular(2)), _pFill);
+
     // Handlebars
-    _pStr..color = const Color(0xFF888888)..strokeWidth = 3;
-    canvas.drawLine(const Offset(12, -6), const Offset(20, -12), _pStr);
-    canvas.drawLine(const Offset(20, -12), const Offset(24, -10), _pStr);
-    // Exhaust
-    _pStr..color = const Color(0xFF888888)..strokeWidth = 2;
-    canvas.drawLine(const Offset(-20, 6), const Offset(-26, 12), _pStr);
+    _pStr..color = const Color(0xFF999999)..strokeWidth = 3..strokeCap = StrokeCap.round;
+    canvas.drawLine(const Offset(-11, -16), const Offset(11, -16), _pStr);
 
-    // ── Rider ─────────────────────────────────────────────────────────────────
-    // Body
-    _pFill.color = const Color(0xFF1A3A6E);
-    canvas.drawRRect(RRect.fromRectAndRadius(const Rect.fromLTWH(-6, -26, 12, 16), const Radius.circular(4)), _pFill);
-    // Helmet
+    // Passenger (behind the rider) — helmet colour pops
+    if (e.carrying) {
+      _pFill.color = const Color(0xFFF2C14E);
+      canvas.drawCircle(const Offset(0, 9), 7, _pFill);
+      _pFill.color = Colors.black.withValues(alpha: 0.25);
+      canvas.drawCircle(const Offset(0, 9), 3, _pFill);
+    }
+
+    // Rider helmet
     _pFill.color = const Color(0xFFFF4400);
-    canvas.drawCircle(const Offset(0, -28), 9, _pFill);
+    canvas.drawCircle(const Offset(0, -3), 8, _pFill);
     _pFill.color = const Color(0xFFAACCFF).withValues(alpha: 0.7);
-    canvas.drawArc(const Rect.fromLTWH(-6, -34, 12, 12), 0.1, pi - 0.2, false, _pFill);
-    // Arm reaching forward
-    _pStr..color = const Color(0xFF1A3A6E)..strokeWidth = 4;
-    canvas.drawLine(const Offset(6, -20), const Offset(18, -14), _pStr);
+    canvas.drawRect(Rect.fromCenter(center: const Offset(0, -7), width: 10, height: 4), _pFill);
 
     canvas.restore();
 
-    // Exhaust smoke puffs
-    if (engine.movLeft || engine.movRight) {
+    // Exhaust puffs
+    if (e.speed > 40) {
       for (int i = 0; i < 3; i++) {
-        final smokeX = px - 26 + (lean < 0 ? -4 : 0);
-        final smokeY = py + 12 - i * 7;
-        final alpha = (0.3 - i * 0.08).clamp(0.0, 1.0);
+        final alpha = (0.28 - i * 0.08).clamp(0.0, 1.0);
         _pFill.color = Colors.grey.withValues(alpha: alpha);
-        canvas.drawCircle(Offset(smokeX, smokeY), 3.0 + i * 1.5, _pFill);
+        canvas.drawCircle(Offset(x + lean * 30, y + 32 + i * 9.0), 3.0 + i * 1.6, _pFill);
       }
     }
 
-    // HONK! flash right after firing
-    if (engine.shootRatio < 0.18) {
-      _pFill.color = Colors.yellow.withValues(alpha: 0.5 * (1 - engine.shootRatio / 0.18));
-      canvas.drawCircle(Offset(px, py - kPlayerH / 2 - 6), 14, _pFill);
+    // Speed streaks during viral rush
+    if (e.rushT > 0) {
+      _pStr..color = Colors.white.withValues(alpha: 0.25)..strokeWidth = 2;
+      for (int i = 0; i < 6; i++) {
+        final sx = engine.roadL + _rng.nextDouble() * (engine.roadR - engine.roadL);
+        final sy = _rng.nextDouble() * e.sh;
+        canvas.drawLine(Offset(sx, sy), Offset(sx, sy + 30), _pStr);
+      }
     }
   }
 
-  // ── Power-ups ─────────────────────────────────────────────────────────────────
-
-  void _drawPowerUps(Canvas canvas) {
-    for (final p in engine.powerUps) {
-      if (!p.active) continue;
-      final bounce = sin(t * 5 + p.x) * 3;
-      // Glow ring
-      _pFill.color = Colors.cyan.withValues(alpha: 0.25 + 0.1 * sin(t * 6));
-      canvas.drawCircle(Offset(p.x, p.y + bounce), 18, _pFill);
-      _drawEmoji(canvas, p.emoji, p.x, p.y + bounce, 24);
-    }
-  }
-
-  // ── Explosions ────────────────────────────────────────────────────────────────
+  // ── FX ────────────────────────────────────────────────────────────────────────
 
   void _drawExplosions(Canvas canvas) {
     for (final ex in engine.explosions) {
@@ -427,72 +462,99 @@ class GamePainter extends CustomPainter {
     }
   }
 
-  // ── Floating texts ────────────────────────────────────────────────────────────
-
   void _drawFloatingTexts(Canvas canvas) {
     for (final ft in engine.floats) {
-      _drawText(canvas, ft.text, ft.x, ft.y, 13, ft.color.withValues(alpha: ft.opacity.clamp(0, 1)));
+      _drawText(canvas, ft.text, ft.x.clamp(70, engine.sw - 70), ft.y, 13,
+          ft.color.withValues(alpha: ft.opacity.clamp(0, 1)));
     }
   }
 
   // ── HUD ───────────────────────────────────────────────────────────────────────
 
   void _drawHUD(Canvas canvas, Size size) {
-    final pad = engine.topPad; // keep the HUD clear of display cutouts
+    final e = engine;
+    final pad = e.topPad;
 
-    // Top bar backdrop
     _pFill.color = Colors.black.withValues(alpha: 0.55);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, 52 + pad), _pFill);
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, 56 + pad), _pFill);
 
-    // Score
-    _drawText(canvas, 'SCORE', 10, pad + 8, 9, Colors.white54, align: TextAlign.left);
-    _drawText(canvas, '${engine.score}', 10, pad + 20, 18, Colors.white, align: TextAlign.left);
+    // Today's earnings
+    final earned = e.dayEarnings.round();
+    _drawText(canvas, 'TODAY', 10, pad + 8, 9, Colors.white54, align: TextAlign.left);
+    _drawText(canvas, '৳$earned', 10, pad + 21, 18,
+        earned >= 0 ? Colors.greenAccent : Colors.redAccent, align: TextAlign.left);
 
-    // Level
-    _drawText(canvas, 'LEVEL', size.width / 2, pad + 8, 9, Colors.white54);
-    _drawText(canvas, '${engine.level}', size.width / 2, pad + 20, 18, Colors.yellowAccent);
+    // Fare status (centre)
+    String status;
+    Color sc;
+    if (e.carrying) {
+      status = '📍 ${e.dropRemainM.round()} m';
+      sc = Colors.orangeAccent;
+    } else if (e.pickupMarker != null) {
+      status = '🙋 PICKUP AHEAD';
+      sc = Colors.greenAccent;
+    } else {
+      status = 'find a fare…';
+      sc = Colors.white38;
+    }
+    _drawText(canvas, status, size.width / 2, pad + 14, 14, sc);
 
-    // High score
+    // Best day
     _drawText(canvas, 'BEST', size.width - 10, pad + 8, 9, Colors.white54, align: TextAlign.right);
-    _drawText(canvas, '${engine.highScore}', size.width - 10, pad + 20, 15, Colors.white54, align: TextAlign.right);
+    _drawText(canvas, '৳${SaveData.bestDay}', size.width - 10, pad + 21, 14, Colors.white54,
+        align: TextAlign.right);
 
-    // Lives (hearts) — dim lost lives instead of shrinking them
-    for (int i = 0; i < 3; i++) {
-      _drawEmoji(canvas, '❤️', 16 + i * 22.0, pad + 44, 16,
-          opacity: i < engine.lives ? 1.0 : 0.2);
+    // Row 2: HP bar, mood, wanted, combo, speed
+    final y2 = pad + 42.0;
+    // HP
+    _pFill.color = Colors.white12;
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromLTWH(10, y2, 74, 8), const Radius.circular(4)), _pFill);
+    final hpFrac = (e.hp / kMaxHp).clamp(0.0, 1.0);
+    _pFill.color = hpFrac > 0.5 ? Colors.greenAccent
+        : hpFrac > 0.25 ? Colors.orange : Colors.redAccent;
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromLTWH(10, y2, 74 * hpFrac, 8), const Radius.circular(4)), _pFill);
+    _drawText(canvas, '🔧', 94, y2 + 4, 10, Colors.white54);
+
+    // Passenger mood
+    if (e.carrying) {
+      final face = e.mood >= 4.5 ? '😁' : e.mood >= 3.5 ? '🙂'
+          : e.mood >= 2.5 ? '😐' : e.mood >= 1.5 ? '😤' : '😡';
+      _drawEmoji(canvas, face, size.width / 2 - 40, y2 + 4, 16);
+      _pFill.color = Colors.white12;
+      canvas.drawRRect(RRect.fromRectAndRadius(
+          Rect.fromLTWH(size.width / 2 - 28, y2, 56, 8), const Radius.circular(4)), _pFill);
+      _pFill.color = Colors.amber;
+      canvas.drawRRect(RRect.fromRectAndRadius(
+          Rect.fromLTWH(size.width / 2 - 28, y2, 56 * ((e.mood - 1) / 4), 8), const Radius.circular(4)), _pFill);
+    } else if (e.combo >= 2) {
+      _drawText(canvas, '🔥 ×${e.combo}', size.width / 2, y2 + 4, 13, Colors.orangeAccent);
     }
 
-    // Combo
-    if (engine.combo >= 2) {
-      final comboColor = engine.combo >= 6 ? Colors.red : engine.combo >= 4 ? Colors.orange : Colors.yellowAccent;
-      _drawText(canvas, '🔥 COMBO ×${engine.combo}', size.width / 2, pad + 44, 14, comboColor);
-    }
-
-    // Status badges (right side HUD)
-    double badgeX = size.width - 8;
-    if (engine.shielded) {
-      _drawEmoji(canvas, '🛡️', badgeX, pad + 44, 16); badgeX -= 24;
-    }
-    if (engine.multiShot) {
-      _drawEmoji(canvas, '⚡', badgeX, pad + 44, 16); badgeX -= 24;
-    }
-    if (engine.slowMo) {
-      _drawEmoji(canvas, '⏱️', badgeX, pad + 44, 16);
+    // Wanted stars
+    if (e.wanted > 0) {
+      final pulse = 0.6 + 0.4 * sin(t * 8);
+      _drawText(canvas, '🚨${"★" * e.wanted}', size.width - 10, y2 + 4, 13,
+          Colors.redAccent.withValues(alpha: pulse), align: TextAlign.right);
+    } else {
+      _drawText(canvas, '${e.speedKmh.round()} km/h', size.width - 10, y2 + 4, 11,
+          Colors.white38, align: TextAlign.right);
     }
 
     // Viral charge bar
     const barH = 6.0;
     final barW = size.width * 0.5;
     final barX = (size.width - barW) / 2;
-    final barY = pad + 57.0;
-
+    final barY = pad + 58.0;
     _pFill.color = Colors.white12;
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(barX, barY, barW, barH), const Radius.circular(3)), _pFill);
-    if (engine.viralCharge > 0) {
-      final charged = engine.viralCharge >= 1.0;
+    canvas.drawRRect(RRect.fromRectAndRadius(
+        Rect.fromLTWH(barX, barY, barW, barH), const Radius.circular(3)), _pFill);
+    if (e.viralCharge > 0) {
+      final charged = e.viralCharge >= 1.0;
       _pFill.color = charged ? Colors.orange : Colors.orange.withValues(alpha: 0.55);
       canvas.drawRRect(RRect.fromRectAndRadius(
-        Rect.fromLTWH(barX, barY, barW * engine.viralCharge, barH), const Radius.circular(3)), _pFill);
+          Rect.fromLTWH(barX, barY, barW * e.viralCharge, barH), const Radius.circular(3)), _pFill);
       if (charged) {
         _drawText(canvas, '🔥 VIRAL READY – swipe up!', size.width / 2, barY + barH + 9, 10,
             Colors.orange.withValues(alpha: 0.8 + 0.2 * sin(t * 6)));
@@ -500,33 +562,22 @@ class GamePainter extends CustomPainter {
     }
   }
 
-  // ── Phase overlays ────────────────────────────────────────────────────────────
+  // ── Overlays ──────────────────────────────────────────────────────────────────
 
   void _drawGetReady(Canvas canvas, Size size) {
     final n = engine.readyT.ceil().clamp(1, 9);
-    final frac = engine.readyT - engine.readyT.floorToDouble(); // 1 → 0 each second
-    _drawText(canvas, engine.level % 3 == 1 && engine.level > 1 ? '👮 REINFORCEMENTS!' : 'WAVE ${engine.level}',
-        size.width / 2, size.height * 0.36, 22, Colors.yellowAccent);
-    // Round the animated size so the TextPainter cache doesn't fill with
-    // one entry per frame.
-    _drawText(canvas, '$n', size.width / 2, size.height * 0.46,
+    final frac = engine.readyT - engine.readyT.floorToDouble();
+    _drawText(canvas, '🏍️ SHIFT STARTING', size.width / 2, size.height * 0.36, 20, Colors.yellowAccent);
+    _drawText(canvas, '$n', size.width / 2, size.height * 0.45,
         (30 + 14 * frac).roundToDouble(), Colors.white.withValues(alpha: 0.35 + 0.65 * frac));
-    _drawText(canvas, 'get ready…', size.width / 2, size.height * 0.55, 13, Colors.white54);
+    _drawText(canvas, 'pick up 🙋  →  drop at 📍  •  HONK 📣 clears the way',
+        size.width / 2, size.height * 0.54, 11, Colors.white54);
   }
 
-  void _drawBossWarning(Canvas canvas, Size size) {
-    _pFill.color = Colors.black.withValues(alpha: 0.5);
+  void _drawKaput(Canvas canvas, Size size) {
+    _pFill.color = Colors.black.withValues(alpha: 0.45);
     canvas.drawRect(Offset.zero & size, _pFill);
-    _drawText(canvas, '⚠️ BOSS APPROACHING ⚠️', size.width / 2, size.height * 0.40, 22, Colors.red);
-    _drawText(canvas, 'SUPER INSPECTOR', size.width / 2, size.height * 0.50, 18, Colors.white);
-    _drawText(canvas, 'get ready…', size.width / 2, size.height * 0.58, 14, Colors.white54);
-  }
-
-  void _drawLevelComplete(Canvas canvas, Size size) {
-    _pFill.color = Colors.black.withValues(alpha: 0.3);
-    canvas.drawRect(Offset.zero & size, _pFill);
-    _drawText(canvas, '✅ LEVEL ${engine.level} CLEARED!', size.width / 2, size.height * 0.42, 22, Colors.greenAccent);
-    _drawText(canvas, 'next level loading…', size.width / 2, size.height * 0.52, 14, Colors.white54);
+    _drawText(canvas, '💥 BIKE KAPUT!', size.width / 2, size.height * 0.44, 24, Colors.redAccent);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────

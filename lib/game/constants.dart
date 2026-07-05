@@ -1,50 +1,74 @@
-// ── Grid ─────────────────────────────────────────────────────────────────────
-const int kRows = 4;
-const int kCols = 9;
-const int kTotalEnemies = kRows * kCols; // 36
+// Traffic Tyrants — every tunable number in one place.
 
-// ── Entity sizes (logical px) ─────────────────────────────────────────────────
-const double kEnemyW = 36.0;
-const double kEnemyH = 36.0;
-const double kEnemySpacingX = 52.0;
-const double kEnemySpacingY = 52.0;
-const double kEnemyStartY = 95.0;
+// ── Road layout ───────────────────────────────────────────────────────────────
+const double kShoulderFrac = 0.14; // sidewalk width, each side, as fraction of sw
+const int    kLanes        = 3;
+const double kPxPerMeter   = 12.0; // world scale: 12 px = 1 m
 
-const double kPlayerW = 54.0;
-const double kPlayerH = 44.0;
+// ── Bike ──────────────────────────────────────────────────────────────────────
+const double kBikeW = 30.0;  // collision box
+const double kBikeH = 58.0;
+const double kMaxHp = 100.0;
 
-const double kBulletW = 5.0;
-const double kBulletH = 18.0;
+// Upgrade curves (tier 0–5)
+const int    kTierMax        = 5;
+const int    kUpCostBase     = 400;   // cost of tier n+1 = base * 2^n
+const double kSpeedBase      = 260.0; // scroll px/s
+const double kSpeedPerTier   = 40.0;
+const double kSteerBase      = 250.0; // lateral px/s
+const double kSteerPerTier   = 45.0;
+const double kHonkRadiusBase = 130.0;
+const double kHonkRadiusTier = 22.0;
+const double kHonkCdBase     = 2.4;
+const double kHonkCdTier     = 0.25;
+const double kSeatTipPerTier = 0.08;  // +8% fare per seat tier
+const double kSeatMoodPerTier= 0.12;  // −12% mood decay per seat tier
+const double kGuardPerTier   = 0.10;  // −10% damage per guard tier
 
-const double kMamlaW = 22.0;
-const double kMamlaH = 28.0;
+// ── Traffic ───────────────────────────────────────────────────────────────────
+// Obstacle own speeds (they drive the same direction, slower than you)
+const double kRickshawSpeed = 70.0;
+const double kCngSpeed      = 130.0;
+const double kBusSpeed      = 95.0;
+const double kDogSpeed      = 0.0;   // dogs cross, they don't drive
+const double kDogCrossVx    = 85.0;
 
-const double kPowerUpSize = 30.0;
+// Damage on collision (before guard reduction)
+const double kDmgBus      = 38.0;
+const double kDmgCng      = 22.0;
+const double kDmgRickshaw = 15.0;
+const double kDmgDog      = 8.0;
+const double kDmgPothole  = 12.0;
 
-const double kBossW = 88.0;
-const double kBossH = 64.0;
+// ── Mamlas & sergeants ────────────────────────────────────────────────────────
+const double kMamlaW       = 22.0;
+const double kMamlaH       = 28.0;
+const double kMamlaSpeed   = 220.0; // own flight speed toward player
+const double kMamlaMaxAimVx = 130.0;
+const double kMamlaFine    = 150.0; // ৳ fine when a mamla lands on you
+const double kSergeantStagger = 3.0; // seconds a honk silences a sergeant
 
-// ── Speeds ────────────────────────────────────────────────────────────────────
-const double kPlayerSpeed    = 230.0;
-const double kBulletSpeed    = 500.0;
-const double kMamlaBaseSpeed = 120.0;
-const double kEnemyBaseSpeed =  50.0;
-const double kPowerUpFallSpeed = 75.0;
+// ── Police / wanted ───────────────────────────────────────────────────────────
+const int    kWantedMax       = 3;
+const double kWantedDecayTime = 12.0; // seconds per star without incidents
+const double kPoliceFine      = 300.0;
+
+// ── Fares ─────────────────────────────────────────────────────────────────────
+const double kFareMinM  = 220.0;  // dropoff distance range (metres)
+const double kFareMaxM  = 480.0;
+const double kFareBase  = 60.0;   // ৳
+const double kFarePerM  = 0.9;    // ৳ per metre
+const double kMoodDecay = 0.05;   // mood units per second while carrying
+const double kTipPerShave = 3.0;  // ৳ per combo point at dropoff (capped ×20)
+
+// ── Honk / viral ──────────────────────────────────────────────────────────────
+const double kViralPerShave   = 0.06;
+const double kViralPerDeliver = 0.18;
+const double kViralPerMamla   = 0.05;
+const double kViralRushTime   = 4.5;
+const double kViralSpeedMult  = 1.6;
 
 // ── Timing ────────────────────────────────────────────────────────────────────
-const double kShootCooldown       = 0.33;
-const double kInvincibleDuration  = 2.2;
-const double kFormationDrop       = 26.0;
-const double kGetReadyDuration    = 2.2;
-
-// ── Limits ────────────────────────────────────────────────────────────────────
-const double kFmMaxSpeed    = 340.0; // cap so the last enemy stays dodgeable
-const double kMamlaMaxAimVx = 110.0; // max horizontal speed of aimed mamlas
-
-// ── Formation layout ──────────────────────────────────────────────────────────
-const double kFmMargin       = 14.0; // side margin that triggers a bounce
-const double kFmMaxSpanFrac  = 0.72; // max formation span as fraction of screen width
-
-// ── Scoring ───────────────────────────────────────────────────────────────────
-const double kViralPerKill = 0.09; // ~11 kills to charge
-const int    kViralBossDamage = 4; // viral blast damage vs the boss
+const double kGetReadyDuration   = 2.2;
+const double kInvincibleDuration = 1.3;
+const double kMarkerSize         = 46.0; // fare marker touch radius-ish

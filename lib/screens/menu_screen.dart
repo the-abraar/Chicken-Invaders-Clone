@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../game/save_data.dart';
 import 'game_screen.dart';
+import 'garage_screen.dart';
 
 class MenuScreen extends StatefulWidget {
   const MenuScreen({super.key});
@@ -30,17 +32,16 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
         builder: (ctx, _) {
           final t = _ctrl.value * 12;
           return Stack(children: [
-            // Stars
             CustomPaint(painter: _StarsPainter(t), size: Size.infinite),
-            // Marching sergeants banner
+            // Rush-hour banner
             Positioned(
-              top: 120,
+              top: 128,
               left: 0, right: 0,
-              child: _MarchingBanner(t: t),
+              child: _TrafficBanner(t: t),
             ),
             // Title
             Positioned(
-              top: 60,
+              top: 56,
               left: 0, right: 0,
               child: Column(children: [
                 Text('TRAFFIC', style: TextStyle(
@@ -62,62 +63,73 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
             ),
             // Subtitle
             Positioned(
-              top: 245,
+              top: 258,
               left: 24, right: 24,
               child: Text(
-                'The corrupt traffic sergeants of BD are throwing mamlas!\nRide and dodge — your honk is your weapon!',
+                'Old Dhaka. Night shift. One crappy bike.\nHustle fares, dodge the chaos, honk at the tyrants — and upgrade your way to the top.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13, height: 1.6),
               ),
             ),
-            // TAP TO PLAY button
+            // Buttons
             Center(child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(height: 160),
-                GestureDetector(
+                const SizedBox(height: 150),
+                _MenuBtn(
+                  icon: '🏍️', label: 'START SHIFT',
+                  color1: Colors.orange.shade700, color2: Colors.red.shade700,
                   onTap: () => Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const GameScreen())),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 44, vertical: 18),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(colors: [Colors.orange.shade700, Colors.red.shade700]),
-                      borderRadius: BorderRadius.circular(40),
-                      boxShadow: [BoxShadow(color: Colors.orange.withValues(alpha: 0.4), blurRadius: 24, spreadRadius: 2)],
-                    ),
-                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                      Text('🏍️', style: TextStyle(fontSize: 22)),
-                      SizedBox(width: 12),
-                      Text('TAP TO RIDE', style: TextStyle(
-                        fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 2)),
-                    ]),
+                      MaterialPageRoute(builder: (_) => const GameScreen())),
+                ),
+                const SizedBox(height: 14),
+                _MenuBtn(
+                  icon: '🔧', label: 'GARAGE',
+                  color1: Colors.blueGrey.shade700, color2: Colors.blueGrey.shade900,
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const GarageScreen()));
+                    if (mounted) setState(() {}); // wallet may have changed
+                  },
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Text(
+                    '💰 ৳${SaveData.wallet}   •   🏆 best day ৳${SaveData.bestDay}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
                   ),
                 ),
               ],
             )),
             // Legend
             const Positioned(
-              bottom: 80, left: 0, right: 0,
+              bottom: 78, left: 0, right: 0,
               child: Column(children: [
-                Text('😤 = 10 pts   😠 = 25 pts   🤬 = 50 pts', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                Text('🙋 pick up  →  📍 drop off  =  ৳ paisa', style: TextStyle(color: Colors.white54, fontSize: 12)),
                 SizedBox(height: 6),
-                Text('🛡️ Shield   ⚡ Multi-shot   ⏱️ Slow-mo', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                Text('🛺 🚌 🐕 🕳️  hurt your bike  •  😠 sergeants throw mamlas', style: TextStyle(color: Colors.white54, fontSize: 11)),
                 SizedBox(height: 6),
-                Text('Swipe UP to unleash VIRAL BLAST 🔥', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                Text('📣 HONK scatters everything • swipe UP to go VIRAL 🔥', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
               ]),
             ),
             // Controls hint
             const Positioned(
-              bottom: 30, left: 0, right: 0,
+              bottom: 34, left: 0, right: 0,
               child: Text(
-                'Hold LEFT / RIGHT sides to move (or ← → keys) • Auto-fires\nSPACE = viral blast • P = pause',
+                'Hold LEFT / RIGHT sides to steer • tap 📣 to honk',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
+                style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
             ),
             // Studio credit
             const Positioned(
-              bottom: 8, left: 0, right: 0,
+              bottom: 10, left: 0, right: 0,
               child: Text(
                 'a BlankFrame Technologies game',
                 textAlign: TextAlign.center,
@@ -131,23 +143,49 @@ class _MenuScreenState extends State<MenuScreen> with SingleTickerProviderStateM
   }
 }
 
-// ── Marching banner of sergeants ─────────────────────────────────────────────
-class _MarchingBanner extends StatelessWidget {
+// ── Menu button ───────────────────────────────────────────────────────────────
+class _MenuBtn extends StatelessWidget {
+  final String icon, label;
+  final Color color1, color2;
+  final VoidCallback onTap;
+  const _MenuBtn({required this.icon, required this.label,
+      required this.color1, required this.color2, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [color1, color2]),
+        borderRadius: BorderRadius.circular(40),
+        boxShadow: [BoxShadow(color: color1.withValues(alpha: 0.4), blurRadius: 22, spreadRadius: 2)],
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(icon, style: const TextStyle(fontSize: 20)),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(
+            fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 2)),
+      ]),
+    ),
+  );
+}
+
+// ── Rush-hour banner ──────────────────────────────────────────────────────────
+class _TrafficBanner extends StatelessWidget {
   final double t;
-  const _MarchingBanner({required this.t});
+  const _TrafficBanner({required this.t});
+  static const _traffic = ['🛺', '🚌', '🐕', '🏍️', '🛺', '😠', '🚔'];
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       height: 54,
       child: Stack(clipBehavior: Clip.none, children: [
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < _traffic.length; i++)
           Positioned(
-            left: ((i * 48.0 - t * 28) % (7 * 48.0 + 48) - 48),
+            left: ((i * 52.0 - t * 30) % (_traffic.length * 52.0 + 52) - 52),
             top: 2 + sin(t * 2.5 + i) * 4,
-            child: Text(
-              i % 3 == 0 ? '😤' : i % 3 == 1 ? '😠' : '🤬',
-              style: const TextStyle(fontSize: 30),
-            ),
+            child: Text(_traffic[i], style: const TextStyle(fontSize: 30)),
           ),
       ]),
     );

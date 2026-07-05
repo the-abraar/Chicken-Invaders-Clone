@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import '../game/game_engine.dart';
+import '../game/save_data.dart';
+import 'garage_screen.dart';
 import 'menu_screen.dart';
 import 'game_screen.dart';
 
+/// End-of-shift summary. The engine has already banked the day's earnings
+/// into SaveData before this screen appears.
 class GameOverScreen extends StatefulWidget {
   final GameEngine engine;
   const GameOverScreen({super.key, required this.engine});
@@ -28,8 +32,11 @@ class _GameOverScreenState extends State<GameOverScreen>
 
   @override
   Widget build(BuildContext context) {
+    // The engine passed here is already disposed (GameScreen owns its
+    // lifecycle); we only read its final numbers.
     final e = widget.engine;
-    final isHigh = e.score >= e.highScore && e.score > 0;
+    final earned = e.dayEarnings.round();
+    final isBest = e.newBest;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -47,61 +54,66 @@ class _GameOverScreenState extends State<GameOverScreen>
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Icon
-                const Text('💀', style: TextStyle(fontSize: 64)),
+                const Text('🔩', style: TextStyle(fontSize: 60)),
                 const SizedBox(height: 12),
-
-                // Title
                 Text(
-                  isHigh ? '🏆 NEW RECORD!' : 'CASE FILED!',
+                  isBest ? '🏆 BEST SHIFT EVER!' : 'BIKE KAPUT!',
                   style: TextStyle(
-                    fontSize: 30, fontWeight: FontWeight.w900,
-                    color: isHigh ? Colors.yellowAccent : Colors.redAccent,
+                    fontSize: 28, fontWeight: FontWeight.w900,
+                    color: isBest ? Colors.yellowAccent : Colors.redAccent,
                     letterSpacing: 3,
                     shadows: [Shadow(blurRadius: 20,
-                        color: isHigh ? Colors.orange : Colors.red)],
+                        color: isBest ? Colors.orange : Colors.red)],
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'The sergeants won this round.',
+                  'The night shift chewed up another bike.',
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
                 ),
-                const SizedBox(height: 36),
+                const SizedBox(height: 32),
 
-                // Score card
+                // Shift report
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 40),
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 22),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.06),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: Colors.white12),
                   ),
                   child: Column(children: [
-                    _Row('SCORE',      '${e.score}',     Colors.yellowAccent),
-                    const Divider(color: Colors.white12, height: 20),
-                    _Row('BEST',       '${e.highScore}', Colors.white70),
-                    const Divider(color: Colors.white12, height: 20),
-                    _Row('LEVEL',      '${e.level}',     Colors.cyanAccent),
-                    const Divider(color: Colors.white12, height: 20),
-                    _Row('ENEMIES JAILED',
-                        '${e.kills}',   Colors.greenAccent),
+                    _Row('EARNED', '৳$earned',
+                        earned >= 0 ? Colors.greenAccent : Colors.redAccent),
+                    const Divider(color: Colors.white12, height: 18),
+                    _Row('FARES', '${e.fares}', Colors.cyanAccent),
+                    const Divider(color: Colors.white12, height: 18),
+                    _Row('DISTANCE', '${(e.distanceM / 1000).toStringAsFixed(1)} km', Colors.white70),
+                    const Divider(color: Colors.white12, height: 18),
+                    _Row('WALLET', '৳${SaveData.wallet}', Colors.yellowAccent),
                   ]),
                 ),
-                const SizedBox(height: 44),
+                const SizedBox(height: 36),
 
-                // Buttons
                 _BigBtn(
                   label: '🏍️  RIDE AGAIN',
                   color1: Colors.orange.shade700,
                   color2: Colors.red.shade700,
-                  // The engine passed here is already disposed (GameScreen owns
-                  // its lifecycle); a new GameScreen creates a fresh engine.
                   onTap: () => Navigator.of(context).pushReplacement(
                     MaterialPageRoute(builder: (_) => const GameScreen())),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
+                _BigBtn(
+                  label: '🔧  GARAGE',
+                  color1: Colors.teal.shade700,
+                  color2: Colors.teal.shade900,
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const GarageScreen()));
+                    if (mounted) setState(() {}); // wallet display refresh
+                  },
+                ),
+                const SizedBox(height: 12),
                 _BigBtn(
                   label: '🏠  MAIN MENU',
                   color1: Colors.blueGrey.shade700,
@@ -109,9 +121,9 @@ class _GameOverScreenState extends State<GameOverScreen>
                   onTap: () => Navigator.of(context).pushReplacement(
                     MaterialPageRoute(builder: (_) => const MenuScreen())),
                 ),
-                const SizedBox(height: 30),
+                const SizedBox(height: 24),
                 Text(
-                  '"Every mamla has an end.\nRide through it."',
+                  '"Roads break bikes.\nBikes don\'t break riders."',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.3),
@@ -154,7 +166,7 @@ class _BigBtn extends StatelessWidget {
       onTap: onTap,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        padding: const EdgeInsets.symmetric(vertical: 15),
         decoration: BoxDecoration(
           gradient: LinearGradient(colors: [color1, color2]),
           borderRadius: BorderRadius.circular(36),
@@ -162,7 +174,7 @@ class _BigBtn extends StatelessWidget {
         ),
         child: Text(label,
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
               color: Colors.white, letterSpacing: 1.5)),
       ),
     ),

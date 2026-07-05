@@ -1,32 +1,51 @@
 # 🏍️ Traffic Tyrants
 
-> The corrupt traffic sergeants of Bangladesh have taken to the skies — and they're raining **mamlas** (court cases 📋) on every biker below. Grab your helmet. Your honk is your weapon.
+> Old Dhaka. Night shift. One crappy bike. The streets are ruled by traffic tyrants — corrupt sergeants hurling **mamlas** (court cases 📋), kamikaze rickshaws, buses that answer to no god, and dogs with a death wish. Hustle fares, honk your way through, and upgrade your way to the top.
 
-A fast, juicy, emoji-powered Space Invaders built **entirely with Flutter's Canvas** — no game engine, no sprite sheets, just `CustomPainter`, math, and attitude. Runs on Android, iOS, desktop, and web from a single codebase.
+A fast, juicy, emoji-powered **endless ride-share hustle** built entirely with Flutter's Canvas — no game engine, no sprite sheets, just `CustomPainter`, math, and attitude. Designed for phones (Android & iOS), portrait, one-thumb-and-a-honk gameplay.
 
 Built by **BlankFrame Technologies**.
 
 <p align="center">
-  <em>😤 😠 🤬 — the formation sways, drops, and throws paperwork at you — 📋📋📋</em>
+  <em>🙋 pick up → 📍 drop off → ৳ get paid → 🔧 upgrade → repeat until the bike gives out</em>
 </p>
+
+## The loop
+
+You're a night-shift ride-share rider on a rusty two-wheeler. Scoop up passengers (🙋), weave them through traffic to the drop pin (📍), and get paid based on **distance, tips, and mood** — every crash makes your passenger angrier and your payout thinner. Bank your ৳, then spend it in the **garage** between runs. Your bike's paint literally changes as you climb from rust-bucket to gold-plated tyrant of the road.
 
 ## Why you'll get hooked
 
-- **Combo multipliers** — chain kills within 2 seconds for ×2/×3/×4 score. Greed is the meta.
-- **🔥 Viral Blast** — every ~11 kills charges a swipe-up super that wipes the two closest rows, or slams the boss for massive damage. Save it or spend it?
-- **👿 Boss every 3rd wave** — the Super Inspector strafes, bobs, and fires 3-way mamla spreads. His HP grows every visit.
-- **Power-ups** — 🛡️ shield, ⚡ triple-shot, ⏱️ slow-mo (bullet-time for everything except *you*).
-- **Enemy personalities** — 😤 constables drop straight, 😠 sergeants *lead their throws at you*, 🤬 inspectors take two hits and flash white when clipped.
-- **Feel** — screen shake, particle explosions, floating score text, engine haptics, honk-blast sound effects, and a per-wave countdown so you're never ambushed.
+- **📣 The honk is the weapon.** One tap scatters street dogs, shoves rickshaws aside, makes sergeants flinch mid-throw, and knocks flying mamlas clean out of the air ("DISMISSED!").
+- **😠 Sergeants line the roadside** and lead their mamla throws at you. Each one that lands is a ৳150 fine — *case filed*.
+- **🚨 Wanted stars.** Clip a rickshaw, CNG, or dog and the law takes interest. At any stars, a police car chases you from behind, mirroring your lane. Get caught: ৳300 and your passenger's respect.
+- **🔥 Go Viral.** Near-misses and deliveries charge the viral meter. Swipe up and the whole street parts for the famous biker — invincible, faster, and **2× earnings** while it lasts.
+- **😁→😡 Passenger mood** is a live meter. Smooth close shaves impress them; crashes, missed drops, and police stops do not. Mood multiplies the fare (0.6×–1.4×). A roadside ☕ fixes a lot.
+- **🔧 Persistent garage.** Five upgrade lines — Engine, Handling, Horn, Seat, Guards — each 5 tiers, each visibly changing how the game feels (and how the bike looks).
+- **Feel.** Screen shake, particle crashes, floating Bangla-flavoured barks ("OI MAMA!", "DEKHE CHALA!"), haptics, honk & crash SFX, headlight beam, street-lamp glow.
 
-## Controls
+## Controls (one thumb, honest)
 
-| Platform | Move | Viral Blast | Pause |
-|----------|------|-------------|-------|
-| Touch | Hold left / right side of screen | Swipe up | ⏸ button (or Android back) |
-| Keyboard | ← → or A / D | Space | P or Esc |
+| Input | Action |
+|-------|--------|
+| Hold left / right side | Steer |
+| Tap 📣 button | HONK (the weapon) |
+| Swipe up | Viral Rush (when charged) |
+| ⏸ / Android back | Pause ("cha break") |
 
-Firing is automatic — positioning *is* the skill.
+Throttle is automatic — the hustle never stops.
+
+## The hazards
+
+| | Damage | Notes |
+|---|---|---|
+| 🚌 Bus | 38 | Immune to honking. Bounces you sideways. Respect the bus. |
+| 🛺 CNG | 22 | Weaves. Slightly honk-resistant. |
+| 🚲 Rickshaw | 15 | Honk shoves it a lane over. |
+| 🐕 Dog | 8 | Crosses the road at the worst time. Honk = instant scatter. |
+| 🕳️ Pothole | 12 | Can't be honked at. It's a hole. |
+| 📋 Mamla | ৳150 fine | Honk it out of the air. |
+| 🚔 Police | ৳300 + dignity | Outlast your wanted stars or outrun them. |
 
 ## Run it
 
@@ -34,59 +53,62 @@ Firing is automatic — positioning *is* the skill.
 git clone https://github.com/<you>/traffic-tyrants.git
 cd traffic-tyrants
 flutter pub get
-flutter run          # or: flutter run -d chrome / -d windows / -d linux
+flutter run        # on a connected Android/iOS device
 ```
 
-Requires Flutter 3.x. That's it — no API keys, no backend, no nonsense.
+Requires Flutter 3.x. No API keys, no backend, no nonsense.
 
 ## How it's built
 
-The whole game is ~1,500 lines of Dart in a deliberately simple architecture:
+~2,000 lines of Dart in a deliberately simple architecture:
 
 ```
 lib/
-├── main.dart                 # App bootstrap (portrait, immersive)
+├── main.dart                 # Bootstrap: portrait, immersive, load save
 ├── game/
 │   ├── constants.dart        # Every tunable number in one place
-│   ├── entities.dart         # Enemy, Boss, Bullet, Mamla, PowerUp, FX
-│   ├── game_engine.dart      # Simulation: tick loop, physics, collisions, scoring
-│   ├── game_painter.dart     # Rendering: one CustomPainter draws everything
+│   ├── entities.dart         # Obstacles, sergeants, mamlas, police, FX
+│   ├── save_data.dart        # Wallet, upgrade tiers, records (shared_preferences)
+│   ├── game_engine.dart      # Simulation: scroll, spawns, fares, collisions, economy
+│   ├── game_painter.dart     # Rendering: one CustomPainter draws the whole street
 │   └── audio.dart            # Pooled SFX + haptics
 └── screens/
-    ├── menu_screen.dart      # Animated title + marching sergeants
-    ├── game_screen.dart      # Input (touch zones + keyboard), pause overlay
-    └── game_over_screen.dart # Stats card + restart
+    ├── menu_screen.dart      # Title, wallet, start/garage
+    ├── garage_screen.dart    # The upgrade shop
+    ├── game_screen.dart      # Touch input, honk button, pause
+    └── game_over_screen.dart # Shift report
 ```
 
 Design notes worth stealing:
 
-- **Engine and renderer never touch.** `GameEngine` is a pure `ChangeNotifier` simulation driven by a `Ticker` with delta-time (frame-rate independent). `GamePainter` just reads its state — you could swap the renderer for Flame or sprites without touching game logic.
-- **Widgets rebuild only on transitions** (phase change, viral-ready), not 60×/s — the canvas has its own `AnimationController`.
-- **TextPainter caching** with alpha quantization: emoji + text rendering is the hottest per-frame cost, so layouts are cached and evicted in halves to avoid hitches.
-- **Every gameplay number lives in `constants.dart`** — rebalancing the whole game is a one-file edit.
+- **Engine and renderer never touch.** `GameEngine` is a pure `ChangeNotifier` simulation on a delta-time `Ticker`; `GamePainter` just reads its state. Widgets rebuild only on transitions (phase, honk-ready, viral-ready), never 60×/s.
+- **The world is procedural.** Roadside props (🌳🏪🕌, street lamps) are seeded from the scroll offset — infinite street, zero assets, perfectly stable as you ride.
+- **TextPainter caching** with alpha quantization keeps emoji rendering cheap; the cache evicts in halves to avoid frame hitches.
+- **Every gameplay number lives in `constants.dart`** — rebalancing the entire economy is a one-file edit.
 
 ## Contributing
 
-PRs are very welcome — this codebase is small enough to read in one sitting, which makes it a great first Flutter-game contribution. Ideas up for grabs:
+PRs are very welcome — the codebase reads in one sitting. Ideas up for grabs:
 
-- 🎵 Background music + richer SFX (power-up, boss-warning stinger)
-- 🌊 New enemy behaviors — divers that break formation, shielded rows, zig-zag mamlas
-- 🏆 Online leaderboard, or local stats (games played, total mamlas dodged)
-- 🎨 New bosses — the *DIG-site Excavator*? the *Ferry Ghat Extortionist*?
+- 🌧️ Rain shifts — wet handling, higher fares
+- 🚚 New traffic — parked trucks, oncoming lane, ambulances you must yield to
+- 🎯 Fare variety — parcel delivery, VIP (double pay, triple mood decay), school run
+- 🏍️ Buyable bikes, not just upgrades
+- 🎵 Background music + a real horn sample per horn tier
 - 🌐 Bangla localization (the game begs for it)
-- 📱 Landscape / tablet layout tuning
-- ✅ Widget & engine unit tests (`GameEngine` is fully testable headless)
+- 🏆 Daily challenges / leaderboard
+- ✅ Engine unit tests (`GameEngine` runs headless)
 
-Workflow: fork → branch → `flutter analyze` clean → PR with a short clip or GIF of the change if it's visual.
+Workflow: fork → branch → `flutter analyze` clean → PR with a short clip if it's visual.
 
 ## The lore
 
-*Mamla* (মামলা) = a court case. In Dhaka traffic mythology, an unlucky biker can collect them like Pokémon. This game is affectionate satire — dodge the paperwork, jail the tyrants, go viral.
+*Mamla* (মামলা) = a court case. In Dhaka traffic mythology, an unlucky biker collects them like Pokémon. This game is affectionate satire — dodge the paperwork, out-hustle the tyrants, go viral.
 
-**A game of many names.** This project has been reincarnated more times than a soap-opera villain: it began life as a weekend pygame *Chicken Invaders* clone (`Main.py` + `src/`, kept in the repo unmodified for archaeology), flirted with the titles *Chicken Henten*, *Mamla Invaders*, and *Mama Brake Kor!* — and has now settled down, gotten a job, and become **Traffic Tyrants**.
+**A game of many names.** This project has been reincarnated more times than a soap-opera villain: it began as a weekend pygame *Chicken Invaders* clone (`Main.py` + `src/`, kept in the repo unmodified for archaeology), became the *Mamla Invaders* formation shooter, flirted with *Chicken Henten* and *Mama Brake Kor!* — and the two ideas finally merged into **Traffic Tyrants**: the shooter's honk-and-mamla combat, riding shotgun on the ride-share hustle.
 
 ---
 
-*"Every mamla has an end. Ride through it."* 🏍️💨
+*"Roads break bikes. Bikes don't break riders."* 🏍️💨
 
 *© BlankFrame Technologies*

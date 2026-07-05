@@ -1,91 +1,124 @@
 import 'dart:math';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'audio.dart';
 import 'constants.dart';
 import 'entities.dart';
+import 'save_data.dart';
 
+/// The whole simulation: an endless scrolling Dhaka street.
+/// Pick up fares, dodge traffic, honk your way through, get paid.
 class GameEngine extends ChangeNotifier {
   // ── Screen ───────────────────────────────────────────────────────────────────
   double sw = 0, sh = 0;
-  double topPad = 0; // display-cutout inset; HUD and formation shift down by it
+  double topPad = 0;
 
-  // ── Formation ────────────────────────────────────────────────────────────────
-  double fmX = 0, fmY = 0, fmDir = 1, fmSpeed = kEnemyBaseSpeed;
-  // Responsive layout: spacing shrinks on narrow screens so the formation
-  // always has room to sway (see start()).
-  double spacingX = kEnemySpacingX;
-  double enemyScale = 1.0;
-  double get eW => kEnemyW * enemyScale;
-  double get eH => kEnemyH * enemyScale;
+  double get roadL => sw * kShoulderFrac;
+  double get roadR => sw - roadL;
+  double get laneW => (roadR - roadL) / kLanes;
+  double laneX(int i) => roadL + laneW * (i + 0.5);
+
+  // ── Bike ─────────────────────────────────────────────────────────────────────
+  double bikeX = 0;
+  double get bikeY => sh - 190;
+  double speed = 0;          // current scroll px/s
+  double _bounceVx = 0;      // lateral kickback after hitting a bus
+  double _slowT = 0;         // pothole / bus slowdown
+  double hp = kMaxHp;
+  double invincT = 0;
+
+  // Upgrade-derived stats (snapshotted at start())
+  double _topSpeed = kSpeedBase, _steer = kSteerBase;
+  double honkRadius = kHonkRadiusBase;
+  double _honkCdMax = kHonkCdBase;
+  int _seatTier = 0, _guardTier = 0;
+
+  // ── World scroll ─────────────────────────────────────────────────────────────
+  double worldOffset = 0; // px travelled
+  double get distanceM => worldOffset / kPxPerMeter;
+
+  // ── Fare state ───────────────────────────────────────────────────────────────
+  bool carrying = false;
+  double mood = 5.0;
+  double _pickupAtM = 0, dropTargetM = 0;
+  FareMarker? pickupMarker, dropMarker;
+  double _fareCooldown = 1.0, _dropRespawnT = 0;
+  int fares = 0;
+
+  double get dropRemainM => carrying ? max(0, dropTargetM - distanceM) : 0;
+
+  // ── Economy ──────────────────────────────────────────────────────────────────
+  double dayEarnings = 0;
+  bool newBest = false; // set at day end, read by the shift-report screen
+
+  // ── Combat-ish ───────────────────────────────────────────────────────────────
+  double honkCD = 0, honkFx = 0;
+  double viralCharge = 0, rushT = 0;
+  int combo = 0;
+  double _comboT = 0;
+  int wanted = 0;
+  double _wantedT = 0;
+
+  bool get honkReady  => honkCD <= 0;
+  bool get viralReady => viralCharge >= 1.0;
+  bool get isProtected => invincT > 0 || rushT > 0;
+  double get speedKmh => speed / kPxPerMeter * 3.6;
 
   // ── Entities ─────────────────────────────────────────────────────────────────
-  List<Enemy>      enemies      = [];
-  Boss?            boss;
-  final List<Bullet>      bullets      = [];
-  final List<Mamla>       mamlas       = [];
-  final List<PowerUp>     powerUps     = [];
-  final List<Explosion>   explosions   = [];
-  final List<FloatingText> floats      = [];
+  final List<Obstacle>   obstacles  = [];
+  final List<Sergeant>   sergeants  = [];
+  final List<Mamla>      mamlas     = [];
+  final List<RoadPickup> pickups    = [];
+  final List<Explosion>  explosions = [];
+  final List<FloatingText> floats   = [];
+  PoliceCar? police;
 
-  // ── Player ───────────────────────────────────────────────────────────────────
-  double playerX = 0;
-  int    lives   = 3;
-  bool shielded = false, multiShot = false, slowMo = false, invincible = false;
-  double shieldT = 0, multiShotT = 0, slowMoT = 0, invincT = 0;
-
-  // ── Input ─────────────────────────────────────────────────────────────────────
+  // ── Input ────────────────────────────────────────────────────────────────────
   bool movLeft = false, movRight = false;
 
-  // ── Progression ──────────────────────────────────────────────────────────────
-  int score = 0, highScore = 0, level = 1, combo = 0, kills = 0;
-  double comboT = 0, viralCharge = 0;
-
-  // ── Internal timing ──────────────────────────────────────────────────────────
-  double _shootCD = 0, _enemyShootT = 1.2, _shakeT = 0, _bossWarnT = 0, _lvlDoneT = 0;
-  double _readyT = 0;
-
-  // ── Phase ─────────────────────────────────────────────────────────────────────
+  // ── Phase / timing ───────────────────────────────────────────────────────────
   GamePhase phase = GamePhase.getReady;
   bool paused = false;
+  double _readyT = 0, _shakeT = 0;
+  double _spawnT = 1.0, _sergeantT = 4.0, _pickupT = 6.0;
 
-  // Widgets only care about phase changes and viral readiness, so we notify on
-  // those transitions instead of every tick (painting is driven separately).
+  double get readyT => _readyT;
+  double get shake  => _shakeT.clamp(0, 1);
+
   GamePhase _prevPhase = GamePhase.getReady;
-  bool _prevReady = false;
+  bool _prevViral = false, _prevHonk = true;
   bool _disposed = false;
 
   // ── Ticker ───────────────────────────────────────────────────────────────────
-  Ticker?  _ticker;
+  Ticker? _ticker;
   Duration? _last;
   final _rng = Random();
 
-  GameEngine() { _loadHigh(); }
-
-  // ── Public ───────────────────────────────────────────────────────────────────
+  // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   void start(TickerProvider vsync, double w, double h, {double topPad = 0}) {
     this.topPad = topPad;
-    resize(w, h);
-    playerX = sw / 2;
+    sw = w; sh = h;
+    bikeX = sw / 2;
+
+    // Snapshot upgrade stats for this run.
+    _topSpeed   = kSpeedBase + SaveData.engine * kSpeedPerTier;
+    _steer      = kSteerBase + SaveData.handling * kSteerPerTier;
+    honkRadius  = kHonkRadiusBase + SaveData.horn * kHonkRadiusTier;
+    _honkCdMax  = kHonkCdBase - SaveData.horn * kHonkCdTier;
+    _seatTier   = SaveData.seat;
+    _guardTier  = SaveData.guards;
+
     _reset();
     _ticker?.dispose();
     _last = null;
     _ticker = vsync.createTicker(_tick)..start();
   }
 
-  /// Handles window resizes (desktop/web). Refits the formation layout and
-  /// keeps the player on screen.
   void resize(double w, double h) {
     if (w == sw && h == sh) return;
     sw = w; sh = h;
-    // Fit the formation to the screen: cap its span at kFmMaxSpanFrac of the
-    // width so it always has sway room before hitting the bounce margins.
-    final maxSpan = sw * kFmMaxSpanFrac;
-    spacingX = min(kEnemySpacingX, (maxSpan - kEnemyW) / (kCols - 1));
-    enemyScale = (spacingX / kEnemySpacingX).clamp(0.65, 1.0);
-    playerX = playerX.clamp(kPlayerW / 2, sw - kPlayerW / 2);
+    bikeX = bikeX.clamp(roadL, roadR);
   }
 
   @override
@@ -94,104 +127,94 @@ class GameEngine extends ChangeNotifier {
   void onLeft(bool v)  => movLeft  = v;
   void onRight(bool v) => movRight = v;
 
-  void viralBlast() {
-    if (viralCharge < 1.0 || paused) return;
-    if (phase != GamePhase.playing && phase != GamePhase.bossFight) return;
-
-    // Against the boss: a charged blast is a big chunk of damage.
-    if (phase == GamePhase.bossFight) {
-      final b = boss;
-      if (b == null || !b.active) return;
-      viralCharge = 0;
-      b.hp -= kViralBossDamage;
-      score += 100 * kViralBossDamage;
-      if (score > highScore) highScore = score;
-      _shakeT = 0.8;
-      explosions.add(Explosion(ox: b.x, oy: b.y));
-      _addFloat(b.x, b.y - 34, '🔥 VIRAL HIT! −$kViralBossDamage HP', Colors.orange);
-      Sfx.bigBoom(); Sfx.tapHeavy();
-      if (b.hp <= 0) _killBoss(b);
-      return;
-    }
-
-    // Against the formation: wipe the two bottom-most rows that still have
-    // survivors, so a charged blast is never wasted on empty rows.
-    final aliveRows = enemies.where((e) => e.alive).map((e) => e.row).toSet().toList()..sort();
-    if (aliveRows.isEmpty) return;
-    final targets = aliveRows.length <= 2
-        ? aliveRows.toSet()
-        : {aliveRows[aliveRows.length - 2], aliveRows.last};
-    viralCharge = 0;
-    int cnt = 0;
-    for (final e in enemies) {
-      if (e.alive && targets.contains(e.row)) { _killEnemy(e, viral: true); cnt++; }
-    }
-    _shakeT = 0.7;
-    _addFloat(sw / 2, sh * .45, '🔥 VIRAL BLAST! ×$cnt', Colors.orange);
-    Sfx.bigBoom(); Sfx.tapHeavy();
-  }
-
   void togglePause() {
     if (phase == GamePhase.gameOver) return;
     paused = !paused;
     notifyListeners();
   }
 
-  double get playerY       => sh - 82;
-  double get readyT        => _readyT;
-  double get shake         => _shakeT.clamp(0, 1);
-  int    get aliveCount    => enemies.where((e) => e.alive).length;
-  // 0.0 = just fired, 1.0 = fully recharged
-  double get shootRatio    => (1.0 - _shootCD / kShootCooldown).clamp(0.0, 1.0);
-
-  // ── Enemy screen position ─────────────────────────────────────────────────────
-  (double, double) ePos(Enemy e) {
-    final totalW = (kCols - 1) * spacingX;
-    final sx = (sw - totalW) / 2;
-    return (sx + e.col * spacingX + fmX, kEnemyStartY + topPad + e.row * kEnemySpacingY + fmY);
-  }
-
-  // ── Init / Reset ──────────────────────────────────────────────────────────────
-
   void _reset() {
-    enemies = _buildGrid();
-    boss = null;
-    bullets.clear(); mamlas.clear(); powerUps.clear();
-    explosions.clear(); floats.clear();
-    fmX = 0; fmY = 0; fmDir = 1;
-    _shootCD = 0; _enemyShootT = 1.2; _shakeT = 0;
+    obstacles.clear(); sergeants.clear(); mamlas.clear();
+    pickups.clear(); explosions.clear(); floats.clear();
+    police = null;
+    pickupMarker = null; dropMarker = null;
+    carrying = false; mood = 5.0; fares = 0;
+    dayEarnings = 0; newBest = false; hp = kMaxHp;
+    speed = 0; worldOffset = 0;
+    combo = 0; _comboT = 0; viralCharge = 0; rushT = 0;
+    wanted = 0; _wantedT = 0;
+    honkCD = 0; honkFx = 0;
+    invincT = 0; _slowT = 0; _bounceVx = 0;
+    _spawnT = 1.2; _sergeantT = 5.0; _pickupT = 6.0; _fareCooldown = 1.0;
+    _dropRespawnT = 0;
+    _shakeT = 0;
     phase = GamePhase.getReady;
     _readyT = kGetReadyDuration;
-    fmSpeed = _calcFmSpeed();
   }
 
-  void _nextLevel() {
-    enemies = []; boss = null;
-    bullets.clear(); mamlas.clear(); powerUps.clear(); floats.clear();
-    fmX = 0; fmY = 0; fmDir = 1;
-    _shootCD = 0; _enemyShootT = 1.0;
-    if (level % 3 == 0) {
-      phase = GamePhase.bossWarning;
-      _bossWarnT = 2.8;
-    } else {
-      enemies = _buildGrid();
-      phase = GamePhase.getReady;
-      _readyT = kGetReadyDuration;
-    }
-    fmSpeed = _calcFmSpeed();
-  }
+  // ── Player actions ───────────────────────────────────────────────────────────
 
-  List<Enemy> _buildGrid() {
-    final list = <Enemy>[];
-    for (int r = 0; r < kRows; r++) {
-      final t = r == 0 ? EnemyType.inspector
-               : r <= 1 ? EnemyType.sergeant
-               : EnemyType.constable;
-      for (int c = 0; c < kCols; c++) {
-        list.add(Enemy(row: r, col: c, type: t));
+  /// The honk IS the weapon: knocks mamlas out of the air, scatters dogs,
+  /// shoves rickshaws aside and makes sergeants flinch.
+  void honk() {
+    if (paused || phase != GamePhase.riding || honkCD > 0) return;
+    honkCD = _honkCdMax;
+    honkFx = 1.0;
+    Sfx.honk(); Sfx.tapLight();
+
+    final r = honkRadius;
+    for (final m in mamlas) {
+      if (!m.active) continue;
+      if (_dist(m.x, m.y) < r) {
+        m.active = false;
+        combo++; _comboT = 4.0;
+        viralCharge = (viralCharge + kViralPerMamla).clamp(0, 1);
+        explosions.add(Explosion(ox: m.x, oy: m.y));
+        _addFloat(m.x, m.y - 14, 'DISMISSED!', Colors.orangeAccent);
       }
     }
-    return list;
+    for (final o in obstacles) {
+      if (!o.active || _dist(o.x, o.y) > r) continue;
+      switch (o.type) {
+        case ObstacleType.dog:
+          o.fleeing = true;
+          o.vx = (o.x < bikeX ? -1 : 1) * (kDogCrossVx * 2.2);
+          o.ownSpeed = -90; // scampers off behind you
+        case ObstacleType.rickshaw:
+          o.vx = (o.x >= bikeX ? 1 : -1) * 175.0;
+        case ObstacleType.cng:
+          o.vx += (o.x >= bikeX ? 1 : -1) * 60.0;
+        default: // buses and potholes don't care about your horn
+          break;
+      }
+    }
+    for (final s in sergeants) {
+      if (s.active && _dist(s.x, s.y) < r * 1.2) {
+        s.staggerT = kSergeantStagger;
+        _addFloat(s.x, s.y - 24, '😳', Colors.white);
+      }
+    }
+  }
+
+  /// Swipe up when charged: go viral. Everyone clears the road for the
+  /// famous biker — brief invincibility, speed boost, double earnings.
+  void viralRush() {
+    if (paused || phase != GamePhase.riding || viralCharge < 1.0) return;
+    viralCharge = 0;
+    rushT = kViralRushTime;
+    _shakeT = 0.5;
+    Sfx.bigBoom(); Sfx.tapHeavy();
+    _addFloat(sw / 2, sh * .4, '🔥 GONE VIRAL! 2× EARNINGS!', Colors.orange);
+    // Traffic parts like the Red Sea.
+    for (final o in obstacles) {
+      if (o.type == ObstacleType.pothole) continue;
+      o.vx = (o.x >= sw / 2 ? 1 : -1) * 150.0;
+    }
+  }
+
+  double _dist(double x, double y) {
+    final dx = x - bikeX, dy = y - bikeY;
+    return sqrt(dx * dx + dy * dy);
   }
 
   // ── Tick ─────────────────────────────────────────────────────────────────────
@@ -202,196 +225,375 @@ class GameEngine extends ChangeNotifier {
     if (dt <= 0 || dt > 0.1) return;
     if (!paused) _update(dt);
 
-    // Notify only on transitions widgets actually watch; the canvas repaints
-    // on its own AnimationController every frame regardless.
-    final ready = viralCharge >= 1.0;
-    if (phase != _prevPhase || ready != _prevReady) {
-      _prevPhase = phase;
-      _prevReady = ready;
+    if (phase != _prevPhase || viralReady != _prevViral || honkReady != _prevHonk) {
+      _prevPhase = phase; _prevViral = viralReady; _prevHonk = honkReady;
       notifyListeners();
     }
   }
 
   void _update(double dt) {
-    if (phase == GamePhase.gameOver) return;
+    if (phase == GamePhase.gameOver) {
+      // Keep the final crash alive: particles fly, texts fade, shake settles.
+      _updateFx(dt);
+      if (_shakeT > 0) _shakeT -= dt * 2;
+      return;
+    }
 
     if (phase == GamePhase.getReady) {
       _readyT -= dt;
-      _movePlayer(dt, canShoot: false); // let players position themselves
+      _moveBike(dt);
       _updateFx(dt);
-      if (_readyT <= 0) { phase = GamePhase.playing; _shootCD = 0.15; }
+      if (_readyT <= 0) phase = GamePhase.riding;
       return;
     }
 
-    if (phase == GamePhase.bossWarning) {
-      _bossWarnT -= dt;
-      if (_bossWarnT <= 0) { boss = Boss(sw: sw, level: level); phase = GamePhase.bossFight; }
-      return;
-    }
+    // Speed: ease toward top speed; slowdowns and viral rush modify it.
+    final target = _topSpeed
+        * (rushT > 0 ? kViralSpeedMult : 1.0)
+        * (_slowT > 0 ? 0.5 : 1.0);
+    speed += (target - speed) * min(1, dt * 2.2);
+    worldOffset += speed * dt;
 
-    if (phase == GamePhase.levelComplete) {
-      _lvlDoneT -= dt;
-      if (_lvlDoneT <= 0) { level++; _nextLevel(); }
-      return;
-    }
-
-    final spd = slowMo ? 0.32 : 1.0;
-
-    _movePlayer(dt);
-    _updateBullets(dt);
-    _updateFormation(dt * spd);
-    _enemyFire(dt * spd);
-    _updateMamlas(dt * spd);
-    _updateBoss(dt * spd);
-    _updatePowerUps(dt);
-    _updateFx(dt);
+    _moveBike(dt);
+    _spawn(dt);
+    _updateObstacles(dt);
+    _updateSergeants(dt);
+    _updateMamlas(dt);
+    _updatePickups(dt);
+    _updateFares(dt);
+    _updatePolice(dt);
     _updateTimers(dt);
+    _updateFx(dt);
     _collide();
-    _checkWin();
   }
 
-  // ── Player & shooting ─────────────────────────────────────────────────────────
-
-  void _movePlayer(double dt, {bool canShoot = true}) {
-    if (movLeft)  playerX -= kPlayerSpeed * dt;
-    if (movRight) playerX += kPlayerSpeed * dt;
-    playerX = playerX.clamp(kPlayerW / 2, sw - kPlayerW / 2);
-
-    if (!canShoot) return;
-    _shootCD -= dt;
-    if (_shootCD <= 0) {
-      _fire();
-      _shootCD += kShootCooldown; // += keeps the cadence steady across frames
-    }
+  void _moveBike(double dt) {
+    if (movLeft)  bikeX -= _steer * dt;
+    if (movRight) bikeX += _steer * dt;
+    bikeX += _bounceVx * dt;
+    _bounceVx -= _bounceVx * min(1, dt * 5);
+    bikeX = bikeX.clamp(roadL + kBikeW / 2, roadR - kBikeW / 2);
   }
 
-  void _fire() {
-    final py = playerY - kPlayerH / 2 + 4;
-    if (multiShot) {
-      bullets.add(Bullet(x: playerX, y: py, vx: -120));
-      bullets.add(Bullet(x: playerX, y: py));
-      bullets.add(Bullet(x: playerX, y: py, vx:  120));
-    } else {
-      bullets.add(Bullet(x: playerX, y: py));
-    }
-    Sfx.shot();
-  }
+  // ── Spawning ─────────────────────────────────────────────────────────────────
 
-  // ── Bullets ───────────────────────────────────────────────────────────────────
-
-  void _updateBullets(double dt) {
-    for (final b in bullets) {
-      if (!b.active) continue;
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      if (b.y < -30 || b.x < -30 || b.x > sw + 30) b.active = false;
-    }
-    bullets.removeWhere((b) => !b.active);
-  }
-
-  // ── Formation ────────────────────────────────────────────────────────────────
-
-  void _updateFormation(double dt) {
-    if (enemies.every((e) => !e.alive)) return;
-    for (final e in enemies) {
-      e.animTimer += dt * 2.2;
-      if (e.hitFlash > 0) e.hitFlash -= dt;
+  void _spawn(double dt) {
+    // Traffic — ramps up with distance.
+    _spawnT -= dt;
+    if (_spawnT <= 0) {
+      _spawnT = (1.45 - distanceM / 2500).clamp(0.55, 1.45)
+          * (0.7 + _rng.nextDouble() * 0.6);
+      _spawnObstacle();
     }
 
-    fmX += fmDir * fmSpeed * dt;
-
-    double minX = double.infinity, maxX = double.negativeInfinity;
-    for (final e in enemies) {
-      if (!e.alive) continue;
-      final (ex, _) = ePos(e);
-      if (ex < minX) minX = ex;
-      if (ex > maxX) maxX = ex;
+    // Sergeants appear after 150 m.
+    _sergeantT -= dt;
+    if (_sergeantT <= 0 && distanceM > 150) {
+      _sergeantT = 5.5 + _rng.nextDouble() * 4.5;
+      final side = _rng.nextBool() ? -1 : 1;
+      final x = side < 0 ? roadL * 0.5 : sw - roadL * 0.5;
+      sergeants.add(Sergeant(x: x, y: -40, side: side));
     }
-    if (fmDir > 0 && maxX + eW / 2 >= sw - kFmMargin) {
-      fmDir = -1; fmY += kFormationDrop;
-    } else if (fmDir < 0 && minX - eW / 2 <= kFmMargin) {
-      fmDir = 1; fmY += kFormationDrop;
+
+    // Roadside goodies.
+    _pickupT -= dt;
+    if (_pickupT <= 0) {
+      _pickupT = 4.5 + _rng.nextDouble() * 4.0;
+      final roll = _rng.nextDouble();
+      final kind = roll < 0.55 ? PickupKind.cash
+                 : roll < 0.80 ? PickupKind.tea
+                 : PickupKind.wrench;
+      pickups.add(RoadPickup(
+        x: laneX(_rng.nextInt(kLanes)),
+        y: -40,
+        kind: kind,
+        value: 40 + _rng.nextInt(9) * 10,
+      ));
     }
   }
 
-  // ── Enemy shooting ────────────────────────────────────────────────────────────
+  void _spawnObstacle() {
+    final roll = _rng.nextDouble();
+    final type = roll < 0.30 ? ObstacleType.rickshaw
+               : roll < 0.54 ? ObstacleType.cng
+               : roll < 0.68 ? ObstacleType.pothole
+               : roll < 0.84 ? ObstacleType.dog
+               : ObstacleType.bus;
 
-  void _enemyFire(double dt) {
-    _enemyShootT -= dt;
-    if (_enemyShootT > 0) return;
-
-    // Bottom-most alive in each column
-    final front = <int, Enemy>{};
-    for (final e in enemies) {
-      if (!e.alive) continue;
-      if (!front.containsKey(e.col) || e.row > front[e.col]!.row) front[e.col] = e;
+    double x, own;
+    if (type == ObstacleType.dog) {
+      final fromLeft = _rng.nextBool();
+      x = fromLeft ? roadL - 20 : roadR + 20;
+      final o = Obstacle(type: type, x: x, y: -30, ownSpeed: kDogSpeed, seed: _rng.nextInt(1000));
+      o.vx = (fromLeft ? 1 : -1) * kDogCrossVx;
+      obstacles.add(o);
+      return;
     }
-    if (front.isNotEmpty) {
-      final shooter = front.values.elementAt(_rng.nextInt(front.length));
-      final (sx, sy) = ePos(shooter);
-      final spawnY = sy + eH / 2;
-      final speed = kMamlaBaseSpeed + level * 12;
-      // Sergeants lead their throw toward the player (capped so it's dodgeable);
-      // everyone else drops straight down.
-      double vx = 0;
-      if (shooter.type == EnemyType.sergeant) {
-        final tArrive = max(0.35, (playerY - spawnY) / speed);
-        vx = ((playerX - sx) / tArrive).clamp(-kMamlaMaxAimVx, kMamlaMaxAimVx);
+    x = laneX(_rng.nextInt(kLanes)) + (_rng.nextDouble() - 0.5) * laneW * 0.3;
+    own = switch (type) {
+      ObstacleType.rickshaw => kRickshawSpeed,
+      ObstacleType.cng      => kCngSpeed,
+      ObstacleType.bus      => kBusSpeed,
+      _                     => 0,
+    };
+    final o = Obstacle(type: type, x: x, y: -80, ownSpeed: own, seed: _rng.nextInt(1000));
+    // Don't spawn on top of something already near the top of the screen.
+    for (final other in obstacles) {
+      if (!other.active || other.y > 160) continue;
+      if ((other.x - o.x).abs() < (other.w + o.w) / 2 + 8 &&
+          (other.y - o.y).abs() < (other.h + o.h) / 2 + 30) {
+        return; // skip this spawn; the timer will try again soon
       }
-      mamlas.add(Mamla(x: sx, y: spawnY, speed: speed, vx: vx));
     }
-
-    final alive = enemies.where((e) => e.alive).length;
-    final ratio = (alive / kTotalEnemies).clamp(0.25, 1.0);
-    _enemyShootT = (1.3 - level * 0.04).clamp(0.28, 1.3) * ratio;
+    obstacles.add(o);
   }
 
-  // ── Mamlas ────────────────────────────────────────────────────────────────────
+  // ── Entity updates ───────────────────────────────────────────────────────────
+
+  void _updateObstacles(double dt) {
+    for (final o in obstacles) {
+      if (!o.active) continue;
+      o.y += (speed - o.ownSpeed) * dt;
+      o.x += o.vx * dt;
+
+      switch (o.type) {
+        case ObstacleType.cng:
+          o.weaveT += dt * 1.6;
+          o.x += sin(o.weaveT) * 30 * dt;
+          o.vx -= o.vx * min(1, dt * 2);
+        case ObstacleType.rickshaw:
+          o.vx -= o.vx * min(1, dt * 2.5); // shove decays
+        case ObstacleType.dog:
+          if (!o.fleeing &&
+              (o.x < roadL - 40 && o.vx < 0 || o.x > roadR + 40 && o.vx > 0)) {
+            o.active = false; // crossed the road, lived to bark another day
+          }
+        default:
+          break;
+      }
+      if (o.type != ObstacleType.dog && o.type != ObstacleType.pothole) {
+        o.x = o.x.clamp(roadL - 10, roadR + 10);
+      }
+
+      // Near-miss: squeeze past something without touching it.
+      if (!o.shaved && !isProtected &&
+          (o.y - bikeY).abs() < 18 &&
+          o.type != ObstacleType.pothole) {
+        final gap = (o.x - bikeX).abs() - (o.w + kBikeW) / 2;
+        if (gap > 0 && gap < 30) {
+          o.shaved = true;
+          combo++; _comboT = 4.0;
+          viralCharge = (viralCharge + kViralPerShave).clamp(0, 1);
+          if (carrying) mood = (mood + 0.05).clamp(1.0, 5.0); // passengers love a pro
+          _addFloat(bikeX, bikeY - 44, 'CLOSE! ×$combo', Colors.cyanAccent);
+        }
+      }
+
+      if (o.y > sh + 90) o.active = false;
+    }
+    obstacles.removeWhere((o) => !o.active);
+  }
+
+  void _updateSergeants(double dt) {
+    for (final s in sergeants) {
+      if (!s.active) continue;
+      s.y += speed * dt;
+      if (s.staggerT > 0) s.staggerT -= dt;
+      s.throwT -= dt;
+      if (s.throwT <= 0 && s.staggerT <= 0 &&
+          s.y > 60 && s.y < bikeY - 120) {
+        s.throwT = 1.6 + _rng.nextDouble() * 0.8;
+        final vy = kMamlaSpeed + speed * 0.6;
+        final tArrive = max(0.35, (bikeY - s.y) / vy);
+        final vx = ((bikeX - s.x) / tArrive).clamp(-kMamlaMaxAimVx, kMamlaMaxAimVx);
+        mamlas.add(Mamla(x: s.x, y: s.y + 14, vx: vx, vy: vy));
+      }
+      if (s.y > sh + 60) s.active = false;
+    }
+    sergeants.removeWhere((s) => !s.active);
+  }
 
   void _updateMamlas(double dt) {
     for (final m in mamlas) {
       if (!m.active) continue;
       m.x += m.vx * dt;
-      m.y += m.speed * dt;
+      m.y += m.vy * dt;
       m.angle += m.spin * dt;
-      if (m.y > sh + 30 || m.x < -30 || m.x > sw + 30) m.active = false;
+      if (m.y > sh + 40 || m.x < -30 || m.x > sw + 30) m.active = false;
     }
     mamlas.removeWhere((m) => !m.active);
   }
 
-  // ── Boss ──────────────────────────────────────────────────────────────────────
-
-  void _updateBoss(double dt) {
-    final b = boss; if (b == null || !b.active) return;
-    b.phase += dt;
-    b.x += b.vx * dt;
-    b.y = 110 + topPad + sin(b.phase * 1.4) * 28;
-    if (b.x < 55) { b.x = 55; b.vx = b.vx.abs() + 5; }
-    if (b.x > sw - 55) { b.x = sw - 55; b.vx = -(b.vx.abs() + 5); }
-
-    b.shootTimer -= dt;
-    if (b.shootTimer <= 0) {
-      for (int i = -1; i <= 1; i++) {
-        final m = Mamla(x: b.x + i * 22, y: b.y + 44, speed: 155 + level * 8);
-        m.spin = i * 2.5;
-        mamlas.add(m);
-      }
-      b.shootTimer = (1.9 - level * 0.05).clamp(0.55, 1.9);
-    }
-  }
-
-  // ── Power-ups ─────────────────────────────────────────────────────────────────
-
-  void _updatePowerUps(double dt) {
-    for (final p in powerUps) {
+  void _updatePickups(double dt) {
+    for (final p in pickups) {
       if (!p.active) continue;
-      p.y += kPowerUpFallSpeed * dt;
-      if (p.y > sh + 30) p.active = false;
+      p.y += speed * dt;
+      if (p.y > sh + 40) { p.active = false; continue; }
+      if ((p.x - bikeX).abs() < 34 && (p.y - bikeY).abs() < 40) {
+        p.active = false;
+        Sfx.ding(); Sfx.tapLight();
+        switch (p.kind) {
+          case PickupKind.cash:
+            final v = rushT > 0 ? p.value * 2 : p.value;
+            dayEarnings += v;
+            _addFloat(p.x, p.y - 16, '+৳$v', Colors.greenAccent);
+          case PickupKind.tea:
+            if (carrying) {
+              mood = (mood + 1.2).clamp(1.0, 5.0);
+              _addFloat(p.x, p.y - 16, '☕ CHA! mood up', Colors.amber);
+            } else {
+              dayEarnings += 20;
+              _addFloat(p.x, p.y - 16, '☕ +৳20', Colors.amber);
+            }
+          case PickupKind.wrench:
+            hp = (hp + 25).clamp(0, kMaxHp);
+            _addFloat(p.x, p.y - 16, '🔧 +25 HP', Colors.lightGreenAccent);
+        }
+      }
     }
-    powerUps.removeWhere((p) => !p.active);
+    pickups.removeWhere((p) => !p.active);
   }
 
-  // ── FX ────────────────────────────────────────────────────────────────────────
+  // ── Fares ────────────────────────────────────────────────────────────────────
+
+  void _updateFares(double dt) {
+    // Spawn a pickup marker when idle.
+    if (!carrying && pickupMarker == null) {
+      _fareCooldown -= dt;
+      if (_fareCooldown <= 0) {
+        pickupMarker = FareMarker(
+          x: laneX(_rng.nextInt(kLanes)), y: -60, dropoff: false);
+      }
+    }
+
+    final pm = pickupMarker;
+    if (pm != null) {
+      pm.y += speed * dt;
+      if (pm.y > sh + 60) {
+        pickupMarker = null;
+        _fareCooldown = 1.5; // missed them — someone else will flag you down
+      } else if ((pm.x - bikeX).abs() < kMarkerSize && (pm.y - bikeY).abs() < kMarkerSize) {
+        pickupMarker = null;
+        carrying = true;
+        mood = 5.0;
+        _pickupAtM = distanceM;
+        dropTargetM = distanceM + kFareMinM + _rng.nextDouble() * (kFareMaxM - kFareMinM);
+        Sfx.ding(); Sfx.tapMedium();
+        _addFloat(bikeX, bikeY - 50, '🙋 FARE! drop in ${(dropTargetM - distanceM).round()} m',
+            Colors.greenAccent);
+      }
+    }
+
+    if (carrying) {
+      mood = (mood - kMoodDecay * (1 - _seatTier * kSeatMoodPerTier) * dt).clamp(1.0, 5.0);
+
+      // Spawn the dropoff marker when it's due on screen.
+      if (dropMarker == null) {
+        _dropRespawnT -= dt;
+        if (_dropRespawnT <= 0 &&
+            (dropTargetM - distanceM) * kPxPerMeter < sh * 0.9) {
+          dropMarker = FareMarker(
+            x: laneX(_rng.nextInt(kLanes)), y: -60, dropoff: true);
+        }
+      }
+
+      final dm = dropMarker;
+      if (dm != null) {
+        dm.y += speed * dt;
+        if (dm.y > sh + 60) {
+          dropMarker = null;
+          _dropRespawnT = 1.2;
+          mood = (mood - 0.6).clamp(1.0, 5.0);
+          _addFloat(bikeX, bikeY - 50, '😤 MISSED THE DROP!', Colors.redAccent);
+        } else if ((dm.x - bikeX).abs() < kMarkerSize && (dm.y - bikeY).abs() < kMarkerSize) {
+          dropMarker = null;
+          _deliver();
+        }
+      }
+    }
+  }
+
+  void _deliver() {
+    carrying = false;
+    fares++;
+    SaveData.totalFares++;
+    final dist = dropTargetM - _pickupAtM;
+    final moodMult = 0.4 + 0.2 * mood; // 😡 0.6× … 😁 1.4×
+    final tip = min(combo, 20) * kTipPerShave;
+    double pay = (kFareBase + dist * kFarePerM) * moodMult
+        * (1 + _seatTier * kSeatTipPerTier) + tip;
+    if (rushT > 0) pay *= 2;
+    dayEarnings += pay;
+    viralCharge = (viralCharge + kViralPerDeliver).clamp(0, 1);
+    _fareCooldown = 2.0;
+    Sfx.ding(); Sfx.tapMedium();
+    final face = mood >= 4.5 ? '😁' : mood >= 3.5 ? '🙂' : mood >= 2.5 ? '😐' : mood >= 1.5 ? '😤' : '😡';
+    _addFloat(bikeX, bikeY - 56, '$face +৳${pay.round()}${rushT > 0 ? " (VIRAL 2×)" : ""}',
+        Colors.greenAccent);
+  }
+
+  // ── Police ───────────────────────────────────────────────────────────────────
+
+  void _addWanted() {
+    wanted = min(kWantedMax, wanted + 1);
+    _wantedT = kWantedDecayTime;
+    _addFloat(bikeX, bikeY - 66, '🚨 WANTED ${"★" * wanted}', Colors.redAccent);
+  }
+
+  void _updatePolice(double dt) {
+    if (wanted > 0 && police == null) {
+      police = PoliceCar(x: bikeX, y: sh + 140);
+    }
+    final pc = police;
+    if (pc == null) return;
+
+    if (pc.leaving || rushT > 0) {
+      pc.y += 200 * dt; // falls behind (viral crowds block the cops too)
+      if (pc.y > sh + 200) police = null;
+      return;
+    }
+
+    // Closes in from behind, mirrors your lane.
+    pc.y -= (44 + 26 * wanted) * dt;
+    pc.y = max(pc.y, bikeY + 46); // rams your rear wheel, doesn't overtake
+    final dx = bikeX - pc.x;
+    final chase = (110 + 35 * wanted) * dt;
+    pc.x += dx.abs() < chase ? dx : dx.sign * chase;
+
+    if (!isProtected &&
+        (pc.x - bikeX).abs() < (kBikeW + 44) / 2 &&
+        (pc.y - bikeY).abs() < (kBikeH + 80) / 2) {
+      // Caught!
+      dayEarnings -= kPoliceFine;
+      wanted = 0;
+      pc.leaving = true;
+      invincT = kInvincibleDuration * 1.5;
+      _shakeT = 0.7;
+      Sfx.crash(); Sfx.tapHeavy();
+      if (carrying) mood = (mood - 1.0).clamp(1.0, 5.0);
+      _addFloat(bikeX, bikeY - 56, '🚔 CAUGHT! −৳${kPoliceFine.round()}', Colors.lightBlueAccent);
+    }
+  }
+
+  // ── Timers / FX ──────────────────────────────────────────────────────────────
+
+  void _updateTimers(double dt) {
+    if (honkCD > 0) honkCD -= dt;
+    if (honkFx > 0) honkFx -= dt * 2.4;
+    if (invincT > 0) invincT -= dt;
+    if (_slowT > 0) _slowT -= dt;
+    if (rushT > 0) rushT -= dt;
+    if (_comboT > 0) { _comboT -= dt; if (_comboT <= 0) combo = 0; }
+    if (_shakeT > 0) _shakeT -= dt * 2;
+    if (wanted > 0) {
+      _wantedT -= dt;
+      if (_wantedT <= 0) {
+        wanted--;
+        _wantedT = kWantedDecayTime;
+        if (wanted == 0) police?.leaving = true;
+      }
+    }
+  }
 
   void _updateFx(double dt) {
     for (final ex in explosions) {
@@ -399,7 +601,7 @@ class GameEngine extends ChangeNotifier {
       for (final p in ex.particles) {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
-        p.vy += 220 * dt; // gravity
+        p.vy += 220 * dt;
       }
     }
     explosions.removeWhere((ex) => ex.progress >= 1.0);
@@ -411,82 +613,71 @@ class GameEngine extends ChangeNotifier {
     floats.removeWhere((ft) => ft.opacity <= 0);
   }
 
-  // ── Timers ───────────────────────────────────────────────────────────────────
-
-  void _updateTimers(double dt) {
-    if (invincible) { invincT -= dt; if (invincT <= 0) invincible = false; }
-    if (shielded)   { shieldT -= dt; if (shieldT <= 0) shielded   = false; }
-    if (multiShot)  { multiShotT -= dt; if (multiShotT <= 0) multiShot = false; }
-    if (slowMo)     { slowMoT -= dt; if (slowMoT <= 0) slowMo = false; }
-    if (comboT > 0) { comboT -= dt; if (comboT <= 0) combo = 0; }
-    if (_shakeT > 0) _shakeT -= dt * 2;
-  }
-
   // ── Collisions ───────────────────────────────────────────────────────────────
 
   void _collide() {
-    // Bullets → enemies
-    for (final b in bullets) {
-      if (!b.active) continue;
-      for (final e in enemies) {
-        if (!e.alive) continue;
-        final (ex, ey) = ePos(e);
-        if (_hit(b.x, b.y, kBulletW, kBulletH, ex, ey, eW, eH)) {
-          b.active = false;
-          e.hp--;
-          if (e.hp <= 0) {
-            _killEnemy(e);
-          } else {
-            // Inspectors take two hits: flash white and give a chip-damage bonus.
-            e.hitFlash = 0.3;
-            score += 5;
-            if (score > highScore) highScore = score;
-            _addFloat(ex, ey - 18, '+5', Colors.white70);
-            Sfx.tapLight();
-          }
-          break;
-        }
-      }
-      // Bullets → boss
-      final bss = boss;
-      if (b.active && bss != null && bss.active) {
-        if (_hit(b.x, b.y, kBulletW, kBulletH, bss.x, bss.y, kBossW, kBossH)) {
-          b.active = false;
-          bss.hp--;
-          score += 100;
-          if (score > highScore) highScore = score;
-          _shakeT = 0.15;
-          _addFloat(bss.x, bss.y - 20, '+100', Colors.yellow);
-          if (bss.hp <= 0) _killBoss(bss);
-        }
-      }
-    }
+    if (phase != GamePhase.riding) return;
 
-    // Mamlas → player
-    if (!invincible && !shielded) {
+    // Mamlas land on you → fine (paper cuts your wallet, not your bike).
+    if (!isProtected) {
       for (final m in mamlas) {
         if (!m.active) continue;
-        if (_hit(m.x, m.y, kMamlaW, kMamlaH, playerX, playerY, kPlayerW, kPlayerH)) {
-          m.active = false; _hitPlayer();
+        if (_hit(m.x, m.y, kMamlaW, kMamlaH, bikeX, bikeY, kBikeW, kBikeH)) {
+          m.active = false;
+          dayEarnings -= kMamlaFine;
+          invincT = 0.6;
+          _shakeT = 0.35;
+          Sfx.crash(); Sfx.tapMedium();
+          if (carrying) mood = (mood - 0.5).clamp(1.0, 5.0);
+          _addFloat(bikeX, bikeY - 50, '📋 CASE FILED! −৳${kMamlaFine.round()}', Colors.red);
         }
       }
     }
 
-    // Power-ups → player
-    for (final p in powerUps) {
-      if (!p.active) continue;
-      if (_hit(p.x, p.y, kPowerUpSize, kPowerUpSize, playerX, playerY, kPlayerW + 12, kPlayerH + 12)) {
-        p.active = false; _applyPow(p);
-      }
-    }
+    if (isProtected) return;
+    for (final o in obstacles) {
+      if (!o.active) continue;
+      if (!_hit(o.x, o.y, o.w, o.h, bikeX, bikeY, kBikeW, kBikeH)) continue;
 
-    // Enemies reach player row → instant game over
-    for (final e in enemies) {
-      if (!e.alive) continue;
-      final (_, ey) = ePos(e);
-      if (ey + eH / 2 >= playerY - kPlayerH / 2) {
-        phase = GamePhase.gameOver; _saveHigh(); return;
+      final dmg = switch (o.type) {
+        ObstacleType.bus      => kDmgBus,
+        ObstacleType.cng      => kDmgCng,
+        ObstacleType.rickshaw => kDmgRickshaw,
+        ObstacleType.dog      => kDmgDog,
+        ObstacleType.pothole  => kDmgPothole,
+      };
+      hp -= dmg * (1 - _guardTier * kGuardPerTier);
+      invincT = kInvincibleDuration;
+      _shakeT = 0.55;
+      combo = 0;
+      Sfx.crash(); Sfx.tapHeavy();
+      if (carrying) mood = (mood - 1.0).clamp(1.0, 5.0);
+      explosions.add(Explosion(ox: bikeX, oy: bikeY - 20));
+
+      switch (o.type) {
+        case ObstacleType.bus:
+          _bounceVx = (bikeX >= o.x ? 1 : -1) * 300.0;
+          _slowT = 1.2;
+          _addFloat(bikeX, bikeY - 50, '🚌 BUS! OUCH!', Colors.orangeAccent);
+        case ObstacleType.pothole:
+          _slowT = 0.8;
+          _addFloat(bikeX, bikeY - 50, '🕳️ POTHOLE!', Colors.orangeAccent);
+        case ObstacleType.dog:
+          o.active = false;
+          _addFloat(o.x, o.y - 16, '🐕 GHEU!', Colors.yellowAccent);
+          _addWanted();
+        case ObstacleType.rickshaw:
+          o.active = false;
+          _addFloat(o.x, o.y - 16, '😡 OI MAMA!', Colors.redAccent);
+          _addWanted();
+        case ObstacleType.cng:
+          o.active = false;
+          _addFloat(o.x, o.y - 16, '😡 DEKHE CHALA!', Colors.redAccent);
+          _addWanted();
       }
+
+      if (hp <= 0) { _dayOver(); return; }
+      break; // one collision per frame is plenty of pain
     }
   }
 
@@ -495,115 +686,21 @@ class GameEngine extends ChangeNotifier {
       (ax - aw/2 < bx + bw/2) && (ax + aw/2 > bx - bw/2) &&
       (ay - ah/2 < by + bh/2) && (ay + ah/2 > by - bh/2);
 
-  // ── Win check ────────────────────────────────────────────────────────────────
+  // ── Day over ─────────────────────────────────────────────────────────────────
 
-  void _checkWin() {
-    if (phase == GamePhase.playing  && enemies.every((e) => !e.alive) ||
-        phase == GamePhase.bossFight && (boss == null || !boss!.active)) {
-      phase = GamePhase.levelComplete;
-      _lvlDoneT = 2.4;
-      _saveHigh(); // persist between levels so a kill/crash doesn't lose the record
-      _addFloat(sw / 2, sh * .42, '✅ LEVEL $level CLEARED!', Colors.greenAccent);
-    }
-  }
-
-  // ── Kill helpers ─────────────────────────────────────────────────────────────
-
-  void _killEnemy(Enemy e, {bool viral = false}) {
-    e.alive = false;
-    final (ex, ey) = ePos(e);
-    kills++;
-    combo++; comboT = 2.0;
-    final mul = combo >= 6 ? 4 : combo >= 4 ? 3 : combo >= 2 ? 2 : 1;
-    final pts = e.points * mul;
-    score += pts;
-    if (score > highScore) highScore = score;
-    viralCharge = (viralCharge + kViralPerKill).clamp(0, 1);
-    fmSpeed = _calcFmSpeed();
-
-    explosions.add(Explosion(ox: ex, oy: ey, label: mul > 1 ? 'x$mul!' : ''));
-    _addFloat(ex, ey - 18, mul > 1 ? '+$pts ×$mul' : '+$pts', Colors.yellow);
-    if (!viral) { Sfx.explosion(); Sfx.tapLight(); } // viral plays one big boom
-
-    if (!viral && _rng.nextDouble() < 0.20) {
-      final t = PowerUpType.values[_rng.nextInt(PowerUpType.values.length)];
-      powerUps.add(PowerUp(x: ex + (_rng.nextDouble() - 0.5) * 16, y: ey, type: t));
-    }
-  }
-
-  void _killBoss(Boss b) {
-    b.active = false;
-    kills++;
-    score += 500; if (score > highScore) highScore = score;
+  void _dayOver() {
+    phase = GamePhase.gameOver;
+    hp = 0;
     _shakeT = 1.0;
     Sfx.bigBoom(); Sfx.tapHeavy();
-    for (int i = 0; i < 9; i++) {
-      explosions.add(Explosion(
-        ox: b.x + (_rng.nextDouble() - 0.5) * 80,
-        oy: b.y + (_rng.nextDouble() - 0.5) * 40,
-        label: i == 4 ? 'BOSS DOWN! +500' : '',
-      ));
-    }
-    _addFloat(b.x, b.y - 10, '🎉 +500  BOSS JAILED!', Colors.greenAccent);
-    for (int i = 0; i < 3; i++) {
-      powerUps.add(PowerUp(
-        x: b.x + (i - 1) * 44.0, y: b.y,
-        type: PowerUpType.values[i % PowerUpType.values.length],
-      ));
-    }
-  }
-
-  void _hitPlayer() {
-    lives--;
-    invincible = true; invincT = kInvincibleDuration;
-    _shakeT = 0.55;
-    Sfx.explosion(); Sfx.tapMedium();
-    _addFloat(playerX, playerY - 28, '📋 MAMLA HIT!', Colors.red);
-    if (lives <= 0) { phase = GamePhase.gameOver; _saveHigh(); }
-  }
-
-  void _applyPow(PowerUp p) {
-    Sfx.tapLight();
-    switch (p.type) {
-      case PowerUpType.shield:
-        shielded = true; shieldT = 4.5;
-        _addFloat(playerX, playerY - 30, '🛡️  SHIELD!', Colors.cyanAccent);
-      case PowerUpType.multiShot:
-        multiShot = true; multiShotT = 6.0;
-        _addFloat(playerX, playerY - 30, '⚡ MULTI-SHOT!', Colors.yellow);
-      case PowerUpType.slowMo:
-        slowMo = true; slowMoT = 4.0;
-        _addFloat(playerX, playerY - 30, '⏱️  SLOW-MO!', Colors.lightBlueAccent);
-    }
+    explosions.add(Explosion(ox: bikeX, oy: bikeY));
+    final earned = dayEarnings.round();
+    SaveData.wallet = max(0, SaveData.wallet + earned);
+    newBest = earned > 0 && earned > SaveData.bestDay; // decide BEFORE updating
+    if (newBest) SaveData.bestDay = earned;
+    SaveData.save();
   }
 
   void _addFloat(double x, double y, String text, Color c) =>
       floats.add(FloatingText(x: x, y: y, text: text, color: c));
-
-  // ── Speed calc ───────────────────────────────────────────────────────────────
-
-  double _calcFmSpeed() {
-    // sqrt ramp + hard cap: the old linear (36/alive) ramp sent the last
-    // enemy across the screen at ~1800 px/s — visually teleporting.
-    final alive = max(1, enemies.where((e) => e.alive).length);
-    final raw = kEnemyBaseSpeed * sqrt(kTotalEnemies / alive) * (1 + (level - 1) * 0.10);
-    return min(raw, kFmMaxSpeed);
-  }
-
-  // ── High score ───────────────────────────────────────────────────────────────
-
-  Future<void> _loadHigh() async {
-    final p = await SharedPreferences.getInstance();
-    if (_disposed) return; // engine may be gone before the async load resolves
-    // 'mamla_high' fallback migrates records saved before the Traffic Tyrants rebrand.
-    highScore = p.getInt('tt_high') ?? p.getInt('mamla_high') ?? 0;
-    notifyListeners();
-  }
-
-  Future<void> _saveHigh() async {
-    if (score >= highScore) {
-      final p = await SharedPreferences.getInstance();
-      await p.setInt('tt_high', highScore);
-    }
-  }
 }
